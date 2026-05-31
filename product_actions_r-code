@@ -1,0 +1,338 @@
+
+################################ Creating Model input file ################################
+
+library(stringr)
+library(readxl)
+library(openxlsx)
+library(reshape)
+library(reshape2)
+library(dplyr)
+library(lubridate)
+
+##################################Set the Location of input file########################################################
+setwd("C:/Users/SAMBIKAP/Desktop")
+
+#get_data_table <- function(){
+  start <- readline(prompt="Enter Start Month in the format YYYYMM : ")
+  end <- readline(prompt="Enter End Month in the format YYYYMM : ")
+  tf <- seq(as.Date(paste(substr(start,1,4),substr(start,5,6),"01", sep = "/")), 
+            as.Date(paste(substr(end,1,4),substr(end,5,6),"01", sep = "/")), by="month")
+  df <- data.frame(tf)
+  df$tf <- paste(substr(df$tf,1,4),substr(df$tf,6,7),sep="")
+  #wd <- "C:/Users/SAMBIKAP/Desktop/21B/Modelling/21B/Inpu"
+  #setwd(wd)
+  
+  ################################     Sales Data       ################################
+  
+  vol <- read_excel("Vol.xlsx", sheet = "Vol")
+  #vol <- data.frame(df)
+  vol[is.na(vol)]<-0
+  vol$Segment <- gsub(" ","_",vol$Segment)
+  names(vol) <- gsub(" ","_",names(vol))
+  names(vol) <- gsub("-","_",names(vol))  
+  vol$Vehicle_Count_SUM <- as.numeric(gsub(",","",as.character(vol$Vehicle_Count_SUM)))
+  logsales <- vol[c(1,4,5)]
+  ff_3 = dcast(logsales, MON_YYYY ~ Segment, value.var = "Vehicle_Count_SUM", fun.agg = function(x) sum(x, na.rm = T))
+  ff_3[,c(2:ncol(ff_3))] <- sapply(ff_3[,c(2:ncol(ff_3))],log)
+  ff_3$MON_YYYY <- as.character(ff_3$MON_YYYY)
+  #ff_3 <- data.frame(ff_3)
+  lj <- left_join(df,ff_3, by = c("tf" = "MON_YYYY"), all.x = TRUE)
+  
+  ################################  Macro economic data ################################
+  ################################        GDP           ################################
+  
+  GDP <- read_excel("Global GDP and CPI - P901 - January 2022.xlsx",
+                    sheet = "GDP")
+  GDP <- GDP[(4:nrow(GDP)),c(1,35:51)]
+  GDP <- filter(GDP, GDP$`GDP Assumptions` =="China")
+  GDP <- t(GDP)
+  GDP <- GDP[c(2:nrow(GDP)),1]
+  GDP <- data.frame(GDP)
+  GDP <- GDP[rep(seq_len(nrow(GDP)), each = 12), ]
+  GDP <- data.frame(GDP)
+  GDP$MON_YYYY <- lj$tf
+  lj <- left_join(lj,GDP, by = c("tf" = "MON_YYYY"), all.x = TRUE)
+  
+  ################################        CPI           ################################
+  
+  CPI <- read_excel("Global GDP and CPI - P901 - January 2022.xlsx",
+                    sheet = "CPI")
+  CPI <- CPI[(4:nrow(CPI)),c(1,35:51)]
+  CPI <- filter(CPI, CPI$`CPI Assumptions` =="China")
+  CPI <- t(CPI)
+  CPI <- CPI[c(2:nrow(CPI)),1]
+  CPI <- data.frame(CPI)
+  CPI <- CPI[rep(seq_len(nrow(CPI)), each = 12), ]
+  CPI <- data.frame(CPI)
+  CPI$MON_YYYY <- lj$tf
+  lj <- left_join(lj,CPI, by = c("tf" = "MON_YYYY"), all.x = TRUE)
+  
+  
+  ################################    Pricing Data      ################################
+  
+  PriceIndex <- read_excel("TPI.xlsx",
+                           sheet = "TPI")
+  TPI <-as.data.frame(t(PriceIndex))
+  colnames(TPI) <- as.matrix(TPI[1,])
+  TPI <- TPI[26:(nrow(TPI)-1),]
+  TPI$MON_YYYY <- as.character(ff_3$MON_YYYY)
+  lj <- left_join(lj,TPI, by = c("tf" = "MON_YYYY"), all.x = TRUE)
+  
+  
+  ################################       STM data       ################################
+  
+  sales <- dcast(vol, Segment+Brand+Model ~ MON_YYYY, value.var = "Vehicle_Count_SUM", sum)
+  sales$Brand <- toupper(sales$Brand)
+  sales <- sales[sales$Segment != "AUV",]
+  sales <- sales[sales$Segment != "SPORTS_PREMIUM_CAR",]
+  seg_uni <- unique(sales$Segment)
+  seg_uni
+  
+  STM <- read_excel ("stm.xlsx")
+  STM$`Brand` <- toupper(STM$`Brand`)
+  STM<- subset(STM,select = -c(2,4))
+  
+  #for (i in 1:4){
+  #STM$Segment <- str_to_title(STM$Segment)
+  STM$Segment <- gsub(" ","_",STM$Segment)
+  #STM$Segment <- gsub("B-MAV","B-MAV",STM$Segment)
+  STM$Segment <- gsub("B/C_PREMIUM_CAR","B/C_PREMIUM_CAR",STM$Segment)
+  STM$Segment <- gsub("C-MAV","C-MAV",STM$Segment)
+  STM$Segment <- gsub("CD_PREMIUM","CD_PREMIUM_CAR",STM$Segment)
+  STM$Segment <- gsub("F_PREMIUM","F_PREMIUM_CAR",STM$Segment)
+  STM$Segment <- gsub("LCPU","LARGE_CROSSOVER_PREMIUM_UTILITY",STM$Segment)
+  STM$Segment <- gsub("LTPU","LARGE_TRADITIONAL_PREMIUM_UTILITY",STM$Segment)
+  STM$Segment <- gsub("LARGE_UTILITY","LARGE_UTILITY",STM$Segment)
+  STM$Segment <- gsub("MEDIUM_CROSSOVER_UTILITY",
+                      "MEDIUM_CROSSOVER_UTILITY",STM$Segment)
+  STM$Segment <- gsub("MPU","MEDIUM_PREMIUM_UTILITY",STM$Segment)
+  STM$Segment <- gsub("MEDIUM_TRADITIONAL_UTILITY",
+                      "MEDIUM_TRADITIONAL_UTILITY",STM$Segment)
+  STM$Segment <- gsub("MINI_UTILITY","MINI_UTILITY",STM$Segment)
+  STM$Segment <- gsub("SPU","SMALL_PREMIUM_UTILITY",STM$Segment)
+  STM$Segment <- gsub("SMALL_UTILITY","SMALL_UTILITY",STM$Segment)
+  STM$Segment <- gsub("SUB_B","SUB-B",STM$Segment)
+  STM$Segment <- gsub("D/E_PREMIUM","D/E_PREMIUM_CAR",STM$Segment)
+  STM$Segment <- gsub("D/E","D/E",STM$Segment)
+  #STM$Segment <- str_to_title(STM$Segment)
+  #}
+  STM_uni <- unique(STM$Segment)
+  STM_uni
+  
+  StartYear <- as.numeric(substr(start,1,4))
+  CurrYear <- as.numeric(readline(prompt="Enter Current Month Year (i.e. data available upto) in the format YYYYMM: "))
+  EndYear <- as.numeric(substr(end,1,4))
+  
+  grep_NE <- function(x,j){
+    tc <- if(grepl("NE",x)) {
+      paste0(j,substr(x, str_length(x)-1, str_length(x)))
+    }
+    return(tc)
+  }
+  grep_TH <- function(x,j){
+    tc <- if(grepl("TH",x)) {
+      paste0(j,substr(x, str_length(x)-1, str_length(x)))
+    }
+    return(tc)
+  }
+  grep_LC <- function(x,j){
+    tc <- if(grepl("LC",x)) {
+      paste0(j,substr(x, str_length(x)-1, str_length(x)))
+    }
+    return(tc)
+  }
+  grep_MN <- function(x,j){
+    tc <- if(grepl("MN",x)) {
+      paste0(j,substr(x, str_length(x)-1, str_length(x)))
+    }
+    return(tc)
+  }
+  
+  
+  grep_AN <- function(x,j){
+    tc <- if(grepl("AN",x)) {
+      paste0(j,substr(x, str_length(x)-1, str_length(x)))
+    }
+    return(tc)
+  }
+  
+  grep_MD <- function(x,j){
+    tc <- if(grepl("MD",x)) {
+      paste0(j,substr(x, str_length(x)-1, str_length(x)))
+    }
+    return(tc)
+  }
+  
+  Co <- function(x,Action,Volume) cor(stats::filter(Action,filter=x,method="recursive"),Volume)
+  
+  PA_Create <- function(SegVol,SegSTM,StartYear,CurrYear,EndYear,pqr){
+    PA_Years <- StartYear:EndYear
+    BrandShare <- data.frame(matrix(0,
+                                    nrow=ncol(SegVol)-3,
+                                    ncol=length(unique(SegVol$Brand))))
+    rownames(BrandShare) <- gsub("X","",names(SegVol)[4:ncol(SegVol)])
+    colnames(BrandShare) <- sort(unique(SegVol$Brand))
+    for(i in 1:nrow(BrandShare)){
+      BrandShare[i,] <- as.numeric(aggregate(SegVol[,i+3]~SegVol$Brand,
+                                             data=SegVol,FUN="sum")[,2])
+    }
+    SBIF <- colSums(BrandShare)/sum(BrandShare) # Simple BIF
+    
+    lbs <- length(rownames(BrandShare))
+    #SBIF <- colSums(BrandShare[(lbs-17):lbs,])/sum(BrandShare[(lbs-17):lbs,]) # Simple BIF
+    
+    Vol <- log(rowSums(BrandShare))
+    
+    PAS <- data.frame(matrix(0,nrow=(EndYear-StartYear+1)*12,ncol=6))
+    rownames(PAS) <- paste0(rep(StartYear:EndYear,each=12),c(paste0(0,1:9),10:12))
+    colnames(PAS) <- c("NE","TH","MN", "AN", "MD","LC")
+    
+    for(j in PA_Years){
+      Action_in_Year <- as.vector(SegSTM[[grep(j,names(SegSTM))]])
+      for(i in 1:length(Action_in_Year)){
+        if(!is.na(Action_in_Year[i])){
+          
+          
+          if(!is.null(grep_NE(Action_in_Year[i],j)) & 
+             (SegSTM$`Brand`[i] %in% names(SBIF))){
+            ne <- grep_NE(Action_in_Year[i],j)
+            if (as.numeric(ne) <= as.numeric(CurrYear)){
+              PAS$NE[which(ne==rownames(PAS))] <- PAS$NE[which(ne==rownames(PAS))] +
+                (colSums(BrandShare[1:match(grep_NE(Action_in_Year[i],j),rownames(BrandShare))-1,])/
+                   sum(BrandShare[1:match(grep_NE(Action_in_Year[i],j),rownames(BrandShare))-1,]))[which(SegSTM$`Brand`[i] == names(SBIF))]
+            }
+            else{
+              PAS$NE[which(ne==rownames(PAS))] <- PAS$NE[which(ne==rownames(PAS))] +
+                SBIF[which(SegSTM$`Brand`[i] == names(SBIF))]
+              
+            }
+          }
+          
+          
+          if(!is.null(grep_TH(Action_in_Year[i],j)) & 
+             (SegSTM$`Brand`[i] %in% names(SBIF))){
+            th <- grep_TH(Action_in_Year[i],j)
+            if (as.numeric(th) <= as.numeric(CurrYear)){
+              PAS$TH[which(th==rownames(PAS))] <- PAS$TH[which(th==rownames(PAS))] +
+                (colSums(BrandShare[1:match(grep_TH(Action_in_Year[i],j),rownames(BrandShare))-1,])/
+                   sum(BrandShare[1:match(grep_TH(Action_in_Year[i],j),rownames(BrandShare))-1,]))[which(SegSTM$`Brand`[i] == names(SBIF))]
+            }
+            else{
+              PAS$TH[which(th==rownames(PAS))] <- PAS$TH[which(th==rownames(PAS))] +
+                SBIF[which(SegSTM$`Brand`[i] == names(SBIF))]
+              
+            }
+            
+          }
+          
+          
+          if(!is.null(grep_MN(Action_in_Year[i],j)) & 
+             (SegSTM$`Brand`[i] %in% names(SBIF))){
+            mn <- grep_MN(Action_in_Year[i],j)
+            if (as.numeric(mn) <= as.numeric(CurrYear)){
+              PAS$MN[which(mn==rownames(PAS))] <- PAS$MN[which(mn==rownames(PAS))] +
+                (colSums(BrandShare[1:match(grep_MN(Action_in_Year[i],j),rownames(BrandShare))-1,])/
+                   sum(BrandShare[1:match(grep_MN(Action_in_Year[i],j),rownames(BrandShare))-1,]))[which(SegSTM$`Brand`[i] == names(SBIF))]
+            }
+            else{
+              PAS$MN[which(mn==rownames(PAS))] <- PAS$MN[which(mn==rownames(PAS))] +
+                SBIF[which(SegSTM$`Brand`[i] == names(SBIF))]
+              
+            }
+          }
+          
+          
+          if(!is.null(grep_AN(Action_in_Year[i],j)) & 
+             (SegSTM$`Brand`[i] %in% names(SBIF))){
+            an <- grep_AN(Action_in_Year[i],j)
+            if (as.numeric(an) <= as.numeric(CurrYear)){
+              PAS$AN[which(an==rownames(PAS))] <- PAS$AN[which(an==rownames(PAS))] +
+                (colSums(BrandShare[1:match(grep_AN(Action_in_Year[i],j),rownames(BrandShare))-1,])/
+                   sum(BrandShare[1:match(grep_AN(Action_in_Year[i],j),rownames(BrandShare))-1,]))[which(SegSTM$`Brand`[i] == names(SBIF))]
+            }
+            else{
+              PAS$AN[which(an==rownames(PAS))] <- PAS$AN[which(an==rownames(PAS))] +
+                SBIF[which(SegSTM$`Brand`[i] == names(SBIF))]
+              
+            }
+          }
+          
+          if(!is.null(grep_LC(Action_in_Year[i],j)) & 
+             (SegSTM$`Brand`[i] %in% names(SBIF))){
+            lc <- grep_LC(Action_in_Year[i],j)
+            if (as.numeric(lc) <= as.numeric(CurrYear)){
+              PAS$LC[which(lc==rownames(PAS))] <- PAS$LC[which(lc==rownames(PAS))] +
+                (colSums(BrandShare[1:match(grep_LC(Action_in_Year[i],j),rownames(BrandShare))-1,])/
+                   sum(BrandShare[1:match(grep_LC(Action_in_Year[i],j),rownames(BrandShare))-1,]))[which(SegSTM$`Brand`[i] == names(SBIF))]
+            }
+            else{
+              PAS$LC[which(lc==rownames(PAS))] <- PAS$LC[which(lc==rownames(PAS))] +
+                SBIF[which(SegSTM$`Brand`[i] == names(SBIF))]
+              
+            }
+          }
+          
+          if(!is.null(grep_MD(Action_in_Year[i],j)) & 
+             (SegSTM$`Brand`[i] %in% names(SBIF))){
+            md <- grep_MD(Action_in_Year[i],j)
+            if (as.numeric(md) <= as.numeric(CurrYear)){
+              
+              PAS$MD[which(md==rownames(PAS))] <- PAS$MD[which(md==rownames(PAS))] +
+                (colSums(BrandShare[1:match(grep_MD(Action_in_Year[i],j),rownames(BrandShare))-1,])/
+                   sum(BrandShare[1:match(grep_MD(Action_in_Year[i],j),rownames(BrandShare))-1,]))[which(SegSTM$`Brand`[i] == names(SBIF))]
+            }
+            else{
+              PAS$MD <- PAS$MD[which(md==rownames(PAS))] +
+                SBIF[which(SegSTM$`Brand`[i] == names(SBIF))]
+              
+            }
+            
+          }
+          
+          
+        }
+      }
+    }
+    
+    # for (h in 1:ncol(PAS)){
+    #  
+    # lambda <- optimise(Co,Action=PAS[1:which(CurrYear == rownames(PAS)),h],
+    #                       Volume=log(colSums(sales[4:ncol(sales)])),interval=c(0,1),maximum=TRUE)
+    #   PAS[h] <- as.vector(stats::filter(PAS[h], filter = lambda$maximum, method = "recursive"))}
+    
+    
+    for(i in 2:nrow(PAS)){
+      PAS[i,]<- PAS[i,] +0.99*PAS[(i-1),]
+    }
+    PAS$AN <- 0.75*PAS$AN
+    PAS$MD <- 0.5*PAS$MD
+    PAS$TH <- 0.5*PAS$TH
+    PAS$MN <- 0.25*PAS$MN
+    PAS$PA <- PAS$NE+PAS$AN+PAS$MD+PAS$TH+PAS$MN+PAS$LC
+    
+    #PAS$PA <- PAS$NE+0.75*PAS$AN+0.5*(PAS$MD+PAS$TH) + 0.25*PAS$MN + PAS$LC
+    names(PAS) <- paste(pqr,names(PAS),sep = "_")
+    PAS$tf <- row.names(PAS)
+    return(PAS)
+  }
+  
+  
+  for (np in seg_uni) {
+    
+    SegVol <- subset(sales, Segment == np)
+    SegSTM <- subset(STM, Segment == np)
+    PAS2 <- PA_Create(SegVol,SegSTM,StartYear,CurrYear,EndYear,np)
+    lj <- left_join(lj,PAS2, by = c("tf" = "tf"), all.x = TRUE)
+    
+  }
+  
+  
+#  return(lj)
+
+
+#df <- get_data_table()
+
+write.xlsx(lj,file = "21B_INPUT_v2.xlsx",sheetName = "Input",append = T)
+
+
+
