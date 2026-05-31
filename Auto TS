@@ -1,0 +1,17 @@
+# Loading the package
+from autots import AutoTS
+import numpy as np
+import pandas as pd
+
+import matplotlib.pyplot as plt
+%matplotlib inline
+data = pd.read_excel('Data.xlsx',sheet_name='Data')
+#data['Month'] = pd.to_datetime(data['Month'])
+#data.set_index('Month',inplace=True)
+from autots import AutoTS
+model = AutoTS(forecast_length=3, frequency='infer',ensemble='simple')
+model = model.fit(data, date_col='Month', value_col='Sales', id_col=None)
+prediction = model.predict()
+#make predictions
+forecast = prediction.forecast
+print("Sales Forecast")
