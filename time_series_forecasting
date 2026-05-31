@@ -1,0 +1,1113 @@
+import streamlit as st
+import pandas as pd
+import numpy as np
+from pmdarima import auto_arima as pm_auto_arima
+from sklearn.feature_selection import mutual_info_regression
+from statsmodels.tsa.statespace.sarimax import SARIMAX
+from sklearn.preprocessing import MinMaxScaler
+from sklearn.metrics import mean_absolute_percentage_error,mean_squared_error
+import matplotlib.pyplot as plt
+import pmdarima as pm
+from prophet import Prophet
+from prophet.utilities import regressor_coefficients
+import plotly.graph_objects as go
+from scipy.optimize import curve_fit
+import xgboost as xgb
+import torch.optim as optim
+import torch
+import torch.nn as nn
+from torch.utils.data import DataLoader, TensorDataset
+from scipy.interpolate import make_interp_spline
+from scipy.stats import norm
+from statsmodels.tsa.holtwinters import ExponentialSmoothing
+from sklearn.linear_model import LinearRegression
+from statsmodels.tsa.api import VARMAX
+from statsmodels.tsa.stattools import grangercausalitytests
+from scipy.fft import fft, ifft 
+from io import BytesIO
+from pyxlsb import open_workbook as open_xlsb
+
+
+
+
+st.set_page_config(page_title="Time Series Model Application", layout="wide")
+
+st.title("📈 Time Series Model Application")
+st.markdown("""
+Welcome! This application allows you to upload your time series data, select exogenous variables, and apply various time series models to make predictions. Let's get started!
+""")
+
+
+def convert_df_to_excel(df):
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        df.to_excel(writer, index=True, sheet_name='Results')
+    processed_data = output.getvalue()
+    return processed_data
+
+
+
+def read_excel_file(file, sheet_name=None, index_col=None):
+    if sheet_name is None:
+        sheet_name = 0  # If sheet_name is not provided, default to the first sheet
+    df = pd.read_excel(file, sheet_name=sheet_name, index_col=index_col, parse_dates=True)
+    return df
+
+def calculate_confidence_intervals(params, cov, alpha=0.05):
+    """
+    Calculate confidence intervals for the parameters.
+    """
+    param_se = np.sqrt(np.diag(cov))
+    ci_bounds = norm.ppf(1 - alpha / 2) * param_se
+    return params - ci_bounds, params + ci_bounds
+
+def calculate_mape(y_true, y_pred):
+    return mean_absolute_percentage_error(y_true, y_pred)
+def calculate_rmse(y_true, y_pred):
+    return np.sqrt(mean_squared_error(y_true, y_pred))
+
+def read_csv_file(file, sheet_name=None, index_col=None):
+    if sheet_name is None:
+        sheet_name = 0  # If sheet_name is not provided, default to the first sheet
+    df = pd.read_csv(file, sheet_name=sheet_name, index_col=index_col, parse_dates=True)   
+    return df 
+
+def calculate_mutual_information(new_df, target_variable):
+    return mutual_info_regression(new_df.drop(columns=[target_variable]), new_df[target_variable])
+
+def time_series_modeling(y, exog_vars, with_intercept=True, seasonal=True, m=1):
+    model_fit = pm.auto_arima(y, X=exog_vars, with_intercept=with_intercept, seasonal=seasonal, m=m, trace=True, error_action="ignore", suppress_warnings=True).fit(y, X=exog_vars)
+    return model_fit
+
+def time_series_modeling_sarimax(y, exog_vars, ar_para, d, ma_para, m, ar_para_s, D, ma_para_s):
+    if m is None:  # No seasonality when m is None
+        model_fit = SARIMAX(y, exog=exog_vars, order=(ar_para, d, ma_para)).fit()
+    else:
+        model_fit = SARIMAX(y, exog=exog_vars, order=(ar_para, d, ma_para), seasonal_order=(ar_para_s, D, ma_para_s, m)).fit()
+    return model_fit
+
+def bass_model_with_exog(t, p, q, m, *betas, exogs):
+    adoption = (m * (1 - np.exp(-(p + q) * t)) / (1 + (q / p) * np.exp(-(p + q) * t)))
+    exog_effect = sum(beta * exog for beta, exog in zip(betas, exogs))
+    return adoption + exog_effect
+def bass_model_univariate(t, p, q, m):
+    adoption = (m * (1 - np.exp(-(p + q) * t)) / (1 + (q / p) * np.exp(-(p + q) * t)))
+    return adoption
+
+def logistic_growth(t, L, k, x0):
+    return L / (1 + np.exp(-k * (t - x0)))
+
+def logistic_growth_with_exog(t, L, k, x0, *betas, exogs):
+    base_growth = L / (1 + np.exp(-k * (t - x0)))
+    exog_effect = sum(beta * exog for beta, exog in zip(betas, exogs))
+    return base_growth + exog_effect
+
+
+def exponential_smoothing_model(y, seasonal_periods, trend, seasonal):
+    model = ExponentialSmoothing(y, trend=trend, seasonal=seasonal, seasonal_periods=seasonal_periods).fit()
+    return model
+
+
+def apply_fourier_transform(df, exog_vars, period):
+    for var in exog_vars:
+        fft_values = fft(df[var].values)
+        df[f'{var}_fft'] = np.abs(fft_values)
+    return df
+
+def time_series_modeling_xgboost(df, target_variable, exog_vars, forecast_periods, hyperparams):
+    X = df[exog_vars].values
+    y = df[target_variable].values
+
+    model = xgb.XGBRegressor(objective='reg:squarederror', **hyperparams)
+    model.fit(X, y)
+
+    # Make future dataframe with exogenous variables
+    future_X = forecast_df[exog_vars].values[:forecast_periods]
+
+    forecast = model.predict(future_X)
+    return model, forecast
+def calculate_confidence_intervals_exp(forecast, residuals, alpha=0.05):
+    se = np.std(residuals)
+    z_score = norm.ppf(1 - alpha / 2)
+    lower_bound = forecast - z_score * se
+    upper_bound = forecast + z_score * se
+    return lower_bound, upper_bound
+class AdvancedLSTMModel(nn.Module):
+    def __init__(self, input_size, hidden_layer_size, output_size, num_layers=2, dropout=0.2, bidirectional=True):
+        super(AdvancedLSTMModel, self).__init__()
+        self.hidden_layer_size = hidden_layer_size
+        self.num_layers = num_layers
+        self.bidirectional = bidirectional
+        self.lstm = nn.LSTM(input_size, hidden_layer_size, num_layers=num_layers, dropout=dropout, bidirectional=bidirectional)
+        self.linear = nn.Linear(hidden_layer_size * 2 if bidirectional else hidden_layer_size, output_size)
+
+    def forward(self, input_seq):
+        batch_size = input_seq.size(1)  # Get the batch size
+        hidden_cell = (torch.zeros(self.num_layers * 2 if self.bidirectional else self.num_layers, batch_size, self.hidden_layer_size),
+                       torch.zeros(self.num_layers * 2 if self.bidirectional else self.num_layers, batch_size, self.hidden_layer_size))
+        lstm_out, _ = self.lstm(input_seq, hidden_cell)
+        predictions = self.linear(lstm_out[-1])  # Use the output of the last time step
+        return predictions
+
+def prepare_lstm_data(series, exogenous, n_lags):
+    X, y = [], []
+    for i in range(len(series) - n_lags):
+        X.append(np.hstack((series[i:i + n_lags], exogenous[i:i + n_lags])))
+        y.append(series[i + n_lags])
+    return np.array(X), np.array(y)
+
+def smooth_curve(x, y, smooth_factor=300):
+    x_smooth = np.linspace(x.min(), x.max(), smooth_factor)
+    y_smooth = make_interp_spline(x, y)(x_smooth)
+    return x_smooth, y_smooth
+
+def varima_model(endog, order=(1, 0, 0)):
+    model = VARMAX(endog=endog, order=order).fit(disp=False)
+    return model
+
+def calculate_confidence_intervals_varm(forecast, residuals, alpha=0.05):
+    se = np.std(residuals)
+    z_score = norm.ppf(1 - alpha / 2)
+    lower_bound = forecast - z_score * se
+    upper_bound = forecast + z_score * se
+    return lower_bound, upper_bound
+
+def perform_granger_causality_tests(data, target_variable, max_lag=12):
+    variables = data.columns
+    test_results = {}
+    for var in variables:
+        if var != target_variable:
+            test_result = grangercausalitytests(data[[target_variable, var]], max_lag, verbose=False)
+            test_results[var] = min([test_result[lag][0]['ssr_chi2test'][1] for lag in range(1, max_lag + 1)])
+    return test_results
+
+# Sidebar for navigation
+st.sidebar.header("Navigation")
+st.sidebar.markdown("Use this sidebar to navigate through the application.")
+
+uploaded_file = st.sidebar.file_uploader("📂 Upload CSV or Excel file", type=['csv', 'xlsx'])
+if uploaded_file:
+    sheet_name = st.sidebar.selectbox("📑 Select sheet name", pd.ExcelFile(uploaded_file).sheet_names, key="sheet_name")
+    index_col = st.sidebar.selectbox("📊 Select index column (optional)", [''] + list(pd.read_excel(uploaded_file, sheet_name=sheet_name).columns), key="index_col")
+    if uploaded_file.name.endswith('.csv'):
+        data = read_csv_file(uploaded_file, sheet_name=sheet_name, index_col=index_col if index_col else None)
+    else:
+        data = read_excel_file(uploaded_file, sheet_name=sheet_name, index_col=index_col if index_col else None)
+    st.write("**Preview of the uploaded data:**")
+    st.write(data.head())
+    col1, col2 = st.columns(2)
+    with col1:
+        start_rows = st.number_input("Enter the first row number to train the model", min_value=0, value=0, step=1)
+    with col2:    
+        split_rows = st.number_input("Enter the last row number to train the model", min_value=1, value=1, step=1)
+
+    new_df = data.iloc[start_rows:split_rows, :]
+    prophet_new_df = data.iloc[start_rows:split_rows, :]
+    forecast_df = data.iloc[split_rows:, :]
+
+    selected_columns = st.multiselect("Select columns for the new DataFrame", new_df.columns)
+
+    if selected_columns:
+        new_df = new_df.loc[:, selected_columns]
+
+        target_variable = st.selectbox("Select the target variable", new_df.columns)
+
+        mi_values = calculate_mutual_information(new_df, target_variable)
+        mi_df = pd.DataFrame({"Column": new_df.drop(columns=[target_variable]).columns, "Mutual Information": mi_values})
+
+        st.write("### Mutual Information Values:")
+        st.dataframe(mi_df)
+
+        selected_mi_columns = st.multiselect("Select columns based on Mutual Information for the final DataFrame", mi_df['Column'])
+
+        if target_variable not in selected_mi_columns:
+            selected_mi_columns.append(target_variable)
+
+        final_df = new_df.loc[:, selected_mi_columns]
+
+        st.write("### Final DataFrame based on selected columns from Mutual Information:")
+        st.dataframe(final_df)
+        exog_vars = st.multiselect("Select exogenous variables for time series modeling", final_df.columns.difference([target_variable]))
+
+    forecast_periods = st.number_input("Select the number of periods to forecast", min_value=1, max_value=150, value=10)
+
+    st.markdown("### Select Models to Apply")
+    with st.expander("Model Selection"):
+        col1, col2, col3, col4, col5, col6, col7, col8, col9 ,col10, col11 = st.columns(11)
+        with col1:
+            auto_arima_check = st.checkbox("Auto ARIMA")
+        with col2:
+            exponential_smoothing_check = st.checkbox("Holt-Winters ES")
+        with col3:
+            sarimax_check = st.checkbox("SARIMAX")
+        with col4:
+            xgboost_check = st.checkbox("XGBoost")
+        with col5:
+            lstm_check = st.checkbox("LSTM") 
+        with col6:
+            multivariate_bass_check = st.checkbox("Multivariate BASS")   
+        with col7:
+            multivariate_logistic_check = st.checkbox("Multivariate Logistic")
+        with col8:
+            univariate_bass_check = st.checkbox("Univariate BASS")
+        with col9:
+            univariate_logistic_check = st.checkbox("Univariate Logistic") 
+        with col10:    
+            varima_check = st.checkbox("Vector ARIMA")     
+        with col11:
+             prophet_check = st.checkbox("Prophet")    
+            
+
+    if auto_arima_check:
+        with st.expander("Auto ARIMA Parameters"):
+            with_intercept = st.checkbox("Include intercept in the model", value=True)
+            seasonal = st.checkbox("Include seasonal component in the model", value=True)
+            if seasonal:
+                m = st.select_slider("Select seasonal period (m)", options=[1, 4, 12], value=1)
+            else:
+                m = 1
+            
+    if exponential_smoothing_check:
+            with st.expander("Exponential Smoothing Parameters"):
+                trend = st.selectbox("Select trend component", options=["add", "mul", None], index=0)
+                seasonal = st.selectbox("Select seasonal component", options=["add", "mul", None], index=0)
+                seasonal_periods = st.select_slider("Select seasonal period", options=[12, 24], value=12)
+    if sarimax_check:
+        with st.expander("SARIMAX Parameters"):
+            col1, col2, col3 = st.columns(3)
+            sarimax_seasonal_period = st.checkbox("Include seasonal component in the model", value=False, key="sarimax_seasonal_period")
+            with col1:
+                ar = st.number_input("AR parameter", min_value=0, step=1, value=1, key="sarimax_ar")
+            with col2:
+                ma = st.number_input("MA parameter", min_value=0, step=1, value=1, key="sarimax_ma")
+            with col3:
+                d = st.number_input("d parameter", min_value=0, step=1, value=1, key="sarimax_d")
+            if sarimax_seasonal_period:
+                m1 = st.select_slider("Select seasonal period (m)", options=[2, 4, 12], value=2)
+                ar_para_s = st.number_input("Enter seasonal AR parameter value", value=1)
+                ma_para_s = st.number_input("Enter seasonal MA parameter value", value=1)
+                D = st.number_input("Enter D parameter value", value=1)
+            else:
+                m1 = None  # No seasonality
+                ar_para_s = 0
+                ma_para_s = 0
+                D = 0
+    if xgboost_check:
+        with st.expander("XGBoost Parameters"):
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                n_estimators = st.number_input("Number of estimators", min_value=50, max_value=500, step=50, value=100)
+                learning_rate = st.slider("Learning rate", min_value=0.01, max_value=1.0, step=0.01, value=0.3)
+                min_child_weight = st.number_input("Minimum child weight", min_value=1, max_value=10, step=1, value=5)
+                gamma = st.number_input("Minimum loss reduction required to make a further partition on a leaf node of the tree", min_value=1, max_value=100, step=1, value=10)
+            with col2:
+                max_depth = st.number_input("Max depth", min_value=1, max_value=10, step=1, value=3)
+                subsample = st.slider("Subsample", min_value=0.1, max_value=1.0, step=0.1, value=0.3)
+                n_jobs = st.number_input("Number of parallel threads (n_jobs)", min_value=1, max_value=8, step=1, value=1)
+                colsample_bytree = st.number_input("Subsample ratio of columns when constructing each tree", min_value=.1, max_value=1.0, step=.1, value=.3)
+            hyperparams = {
+                'n_estimators': n_estimators,
+                'min_child_weight': min_child_weight,
+                'learning_rate': learning_rate,
+                'max_depth': max_depth,
+                'subsample': subsample,
+                'n_jobs': n_jobs,
+                'colsample_bytree': colsample_bytree,
+                'gamma': gamma
+            }
+            # with col3:
+            #     fourier_transform_check = st.checkbox("Fourier Transformation")
+            # if fourier_transform_check:
+            #     period = st.number_input("Select period for Fourier Transformation", min_value=2, max_value=365, value=12)
+            #     order = st.number_input("Select order for Fourier Transformation", min_value=1, max_value=10, value=3) 
+            
+            # st.markdown("### Advanced Features for XGBoost")
+            with col3:
+                fourier_transform_check = st.checkbox("Fourier Transformation")
+                if fourier_transform_check:
+                    period = st.number_input("Select period for Fourier Transformation", min_value=2, max_value=365, value=12)
+                    # order = st.number_input("Select order for Fourier Transformation", min_value=1, max_value=10, value=3)
+                
+    if lstm_check:
+        with st.expander("LSTM Parameters"):
+            n_lags = st.number_input("Number of Lags (time steps)", min_value=1, value=1, step=1)
+            epochs = st.number_input("Number of Epochs", min_value=1, value=100, step=1)
+            batch_size = st.number_input("Batch Size", min_value=1, value=32, step=1)
+            hidden_layer_size = st.number_input("Hidden Layer Size", min_value=1, value=50, step=1)
+            num_layers = st.number_input("Number of layers", min_value=1, value=1, step=1)
+            dropout = st.number_input("Dropout", max_value=1.0, value=0.2, step=0.1)
+            bidirectional = st.checkbox("Bidirectional", value=False)   
+            
+    if varima_check:
+        with st.expander("VARIMA Parameters"):
+            p_vma = st.number_input("Order of AR (p)", min_value=0, value=1, step=1)
+            d_vma = st.number_input("Order of Integration (d)", min_value=0, value=0, step=1)
+            q_vma = st.number_input("Order of MA (q)", min_value=0, value=0, step=1)        
+
+    if prophet_check:
+        with st.expander("Prophet Parameters"):
+            col1, col2, col3 = st.columns(3)
+            yearly_seasonality = st.checkbox("Include yearly seasonality", value=True, key="yearly_seasonal_period")
+            with col1:
+                period = st.number_input("Period", min_value=0.0, step=1.0, value=30.5, key="period")
+            with col2:
+                fourier_order = st.number_input("Fourier order", min_value=0, step=1, value=5, key="fourier_order")
+            with col3:
+                seasonality_mode = st.selectbox("Seasonality Mode", options=['additive', 'multiplicative'], index=1, key="seasonality_mode")    
+            
+            
+
+    if st.button("Run Models"):
+        st.markdown("### Model Results")
+        results = {}
+        model_predictions = {}
+        target_column = data.columns[-1]
+        exog_columns = data.columns[:-1]
+        
+        # Initialize session state for models
+        if 'Auto_ARIMA_model' not in st.session_state:
+            st.session_state['Auto_ARIMA_model'] = None
+        if 'SARIMAX_model' not in st.session_state:
+            st.session_state['SARIMAX_model'] = None
+        if 'XGBoost_model' not in st.session_state:
+            st.session_state['XGBoost_model'] = None    
+
+        
+        if auto_arima_check:
+            with st.spinner("Fitting Auto ARIMA model..."):
+                model_fit = time_series_modeling(final_df[target_variable], final_df[exog_vars], with_intercept=with_intercept, seasonal=seasonal, m=m)
+                y_true = final_df[target_variable].head(len(final_df))  # Excluding last value for validation
+                y_pred = model_fit.predict_in_sample(X=final_df[exog_vars])
+                mape = calculate_mape(y_true, y_pred)
+                rmse = calculate_rmse(y_true, y_pred)
+                forecast = model_fit.predict(n_periods=forecast_periods, X=forecast_df[exog_vars].head(forecast_periods))
+                results['Auto ARIMA'] = [mape,rmse] + list(forecast)
+                model_predictions['Auto ARIMA'] = y_pred
+                st.session_state['Auto_ARIMA_model'] = model_fit
+                st.success("Auto ARIMA model fitted successfully.")
+                
+        if exponential_smoothing_check:
+            with st.spinner("Fitting Exponential Smoothing model..."):
+                # Fit the Exponential Smoothing model to the target variable
+                model_fit = exponential_smoothing_model(final_df[target_variable], seasonal_periods=seasonal_periods, trend=trend, seasonal=seasonal)
+                y_true = final_df[target_variable]  # Excluding last value for validation
+                y_pred = model_fit.fittedvalues
+                residuals = y_true - y_pred
+
+                # Fit a regression model on the residuals using the exogenous variables
+                if exog_vars:
+                    reg_model = LinearRegression().fit(final_df[exog_vars], residuals)
+                    residual_forecast = reg_model.predict(forecast_df[exog_vars].head(forecast_periods))
+                else:
+                    residual_forecast = np.zeros(forecast_periods)
+
+                mape = calculate_mape(y_true, y_pred)
+                rmse = calculate_rmse(y_true, y_pred)
+                forecast = model_fit.forecast(forecast_periods) + residual_forecast
+                lower_bound, upper_bound = calculate_confidence_intervals_exp(forecast, residuals)
+                results['Exponential Smoothing'] = [mape,rmse] + list(forecast)
+                model_predictions['Exponential Smoothing'] = y_pred
+                st.session_state['Exponential_Smoothing_model'] = model_fit
+                st.session_state['Exponential_Smoothing_forecast'] = forecast
+                st.session_state['Exponential_Smoothing_conf_int'] = (lower_bound, upper_bound)
+                st.success("Exponential Smoothing model fitted successfully.")
+                
+        if sarimax_check:
+            with st.spinner("Fitting SARIMAX model..."):
+                model_fit_sarimax = time_series_modeling_sarimax(final_df[target_variable], final_df[exog_vars], ar, d, ma, m1, ar_para_s, D, ma_para_s)
+                y_true_sarimax = final_df[target_variable].head(len(final_df))
+                prediction_sarimax = model_fit_sarimax.get_prediction(X=final_df[exog_vars])
+                y_pred_sarimax = prediction_sarimax.predicted_mean
+                mape_sarimax = calculate_mape(y_true_sarimax, y_pred_sarimax)
+                rmse_sarimax = calculate_rmse(y_true_sarimax, y_pred_sarimax)
+                predictions_future = model_fit_sarimax.get_forecast(steps=forecast_periods, exog=forecast_df[exog_vars].head(forecast_periods))
+                forecast = predictions_future.predicted_mean
+                results['SARIMAX'] = [mape_sarimax, rmse_sarimax] + list(forecast)
+                model_predictions['SARIMAX'] = y_pred_sarimax
+                st.session_state['SARIMAX_model'] = model_fit_sarimax
+                st.success("SARIMAX model fitted successfully.")
+          
+         # if xgboost_check:
+#             with st.spinner("Fitting XGBoost model..."):
+#                 # Apply advanced features if selected
+#                 if fourier_transform_check:
+#                     # final_df = apply_fourier_transform(final_df, period, order)
+#                     # forecast_df = apply_fourier_transform(forecast_df, period, order)
+#                     # fourier_features = [f'sin_{k}' for k in range(1, order + 1)] + [f'cos_{k}' for k in range(1, order + 1)]
+#                     final_df = apply_fourier_transform(final_df, exog_vars, period)
+#                     forecast_df = apply_fourier_transform(forecast_df, exog_vars, period)
+#                     fourier_features = [f'{var}_fft' for var in exog_vars] 
+#                     exog_vars += fourier_features
+
+#                 # Drop NaN values created by lag and rolling features
+#                 final_df.dropna(subset=exog_vars, inplace=True)
+#                 forecast_df.dropna(subset=exog_vars, inplace=True) # Ensure it aligns with the forecast periods
+
+#                 if not final_df.empty and not forecast_df.empty:
+#                     model_xgboost, forecast_xgboost = time_series_modeling_xgboost(final_df, target_variable, exog_vars, forecast_periods, hyperparams)
+#                     y_true_xgboost = final_df[target_variable].values  # Original true values
+#                     y_pred_xgboost = model_xgboost.predict(final_df[exog_vars].values)
+#                     mape_xgboost = calculate_mape(y_true_xgboost, y_pred_xgboost)
+#                     rmse_xgboost = calculate_rmse(y_true_xgboost, y_pred_xgboost)
+#                     results['XGBoost'] = [mape_xgboost,rmse_xgboost] + list(forecast_xgboost)
+#                     model_predictions['XGBoost'] = y_pred_xgboost
+#                     st.session_state['XGBoost_model'] = model_xgboost
+#                     st.session_state['forecast_xgboost'] = forecast_xgboost
+#                     st.session_state['exog_vars'] = exog_vars
+#                     st.success("XGBoost model fitted successfully.")
+#                 else:
+#                     st.error("Insufficient data after applying advanced features. Please adjust the parameters or provide more data.") 
+#                 # model_xgboost, forecast_xgboost = time_series_modeling_xgboost(final_df, target_variable, exog_vars, forecast_periods, hyperparams)
+#                 # y_true_xgboost = final_df[target_variable].values  # Original true values
+#                 # y_pred_xgboost = model_xgboost.predict(final_df[exog_vars].values)
+#                 # mape_xgboost = calculate_mape(y_true_xgboost, y_pred_xgboost)
+#                 # results['XGBoost'] = [mape_xgboost] + list(forecast_xgboost)
+#                 # model_predictions['XGBoost'] = y_pred_xgboost
+#                 # st.session_state['XGBoost_model'] = model_xgboost
+#                 # st.success("XGBoost model fitted successfully.")
+        if xgboost_check:
+            with st.spinner("Fitting XGBoost model..."):
+                # Apply advanced features if selected
+                if fourier_transform_check:
+                    final_df = apply_fourier_transform(final_df, exog_vars, period)
+                    forecast_df = apply_fourier_transform(forecast_df, exog_vars, period)
+                    # fourier_features = [f'{var}_fft_real' for var in exog_vars] + [f'{var}_fft_imag' for var in exog_vars]
+                    fourier_features = [f'{var}_fft' for var in exog_vars] 
+                    exog_vars1 = exog_vars.copy()
+                    exog_vars1 += fourier_features
+                    model_xgboost, forecast_xgboost = time_series_modeling_xgboost(final_df, target_variable, exog_vars1, forecast_periods, hyperparams)
+                    y_true_xgboost = final_df[target_variable].values  # Original true values
+                    y_pred_xgboost = model_xgboost.predict(final_df[exog_vars1].values)
+                    mape_xgboost = calculate_mape(y_true_xgboost, y_pred_xgboost)
+                    rmse = calculate_rmse(y_true_xgboost, y_pred_xgboost)
+                    results['XGBoost'] = [mape_xgboost,rmse] + list(forecast_xgboost)
+                    model_predictions['XGBoost'] = y_pred_xgboost
+                    st.session_state['XGBoost_model'] = model_xgboost
+                    st.session_state['forecast_xgboost'] = forecast_xgboost
+                    st.session_state['exog_vars'] = exog_vars1
+                    st.success("XGBoost model fitted successfully.")
+                else:
+                    model_xgboost, forecast_xgboost = time_series_modeling_xgboost(final_df, target_variable, exog_vars, forecast_periods, hyperparams)
+                    y_true_xgboost = final_df[target_variable].values  # Original true values
+                    y_pred_xgboost = model_xgboost.predict(final_df[exog_vars].values)
+                    mape_xgboost = calculate_mape(y_true_xgboost, y_pred_xgboost)
+                    rmse = calculate_rmse(y_true_xgboost, y_pred_xgboost)
+                    results['XGBoost'] = [mape_xgboost,rmse] + list(forecast_xgboost)
+                    model_predictions['XGBoost'] = y_pred_xgboost
+                    st.session_state['XGBoost_model'] = model_xgboost
+                    st.session_state['forecast_xgboost'] = forecast_xgboost
+                    st.session_state['exog_vars'] = exog_vars
+                    st.success("XGBoost model fitted successfully.")
+        
+        if lstm_check:
+            with st.spinner("Fitting LSTM model..."):
+                series = final_df[target_variable].values
+                exogenous = final_df[exog_vars].values  
+                scaler = MinMaxScaler()
+                series_scaled = scaler.fit_transform(series.reshape(-1, 1))
+                exog_scaler = MinMaxScaler()
+                exogenous_scaled = exog_scaler.fit_transform(exogenous)
+
+                # Prepare the LSTM data
+                X_lstm, y_lstm = prepare_lstm_data(series_scaled, exogenous_scaled, n_lags)
+                X_lstm = torch.tensor(X_lstm, dtype=torch.float32)
+                y_lstm = torch.tensor(y_lstm, dtype=torch.float32)
+
+                input_size = X_lstm.shape[2]  # Number of features (n_lags + number of exogenous variables)
+                lstm_model = AdvancedLSTMModel(input_size=input_size, hidden_layer_size=hidden_layer_size, output_size=1, num_layers=num_layers, dropout=dropout, bidirectional=bidirectional)
+                loss_function = nn.MSELoss()
+                optimizer = optim.Adam(lstm_model.parameters(), lr=0.001)
+                scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=10, factor=0.5)
+
+                # Create DataLoader for batch training
+                train_dataset = TensorDataset(X_lstm, y_lstm)
+                train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+                # Training loop
+                lstm_model.train()
+                for epoch in range(epochs):
+                    epoch_loss = 0
+                    for seq, labels in train_loader:
+                        optimizer.zero_grad()
+                        seq = seq.permute(1, 0, 2)  # Permute to (seq_len, batch, input_size)
+                        lstm_model.hidden_cell = (torch.zeros(num_layers * 2 if bidirectional else num_layers, seq.size(1), lstm_model.hidden_layer_size),
+                                                torch.zeros(num_layers * 2 if bidirectional else num_layers, seq.size(1), lstm_model.hidden_layer_size))
+                        y_pred = lstm_model(seq)
+                        single_loss = loss_function(y_pred, labels)
+                        single_loss.backward()
+                        optimizer.step()
+                        epoch_loss += single_loss.item()
+                    if epoch % 10 == 0:
+                        # Calculate predictions on the entire training set
+                        lstm_model.eval()
+                        with torch.no_grad():
+                            train_preds_scaled = []
+                            for seq in X_lstm:
+                                seq = seq.unsqueeze(1)  # Add batch dimension
+                                lstm_model.hidden_cell = (torch.zeros(num_layers * 2 if bidirectional else num_layers, 1, lstm_model.hidden_layer_size),
+                                                        torch.zeros(num_layers * 2 if bidirectional else num_layers, 1, lstm_model.hidden_layer_size))
+                                train_preds_scaled.append(lstm_model(seq).item())
+                        lstm_model.train()
+
+                        # Convert predictions back to original scale
+                        train_preds = scaler.inverse_transform(np.array(train_preds_scaled).reshape(-1, 1)).flatten()
+                        train_true = series[n_lags:]  # Original true values
+
+                        train_mape = calculate_mape(train_true, train_preds)
+                        train_rmse = calculate_rmse(train_true, train_preds)
+                        print(f'Epoch {epoch} Loss: {epoch_loss / len(train_loader)}, MAPE: {train_mape}')
+
+                # Forecasting
+                lstm_model.eval()
+                future_X = np.hstack((series_scaled[-n_lags:], exogenous_scaled[-n_lags:])).reshape((1, n_lags, input_size))
+                future_X = torch.tensor(future_X, dtype=torch.float32)
+                forecast = []
+
+                # Extend exogenous variables for the forecasting period (assuming they are available in forecast_df)
+                future_exog = forecast_df[exog_vars].values
+                future_exog_scaled = exog_scaler.transform(future_exog)
+                for i in range(forecast_periods):
+                    with torch.no_grad():
+                        lstm_model.hidden_cell = (torch.zeros(num_layers * 2 if bidirectional else num_layers, 1, lstm_model.hidden_layer_size),
+                                                torch.zeros(num_layers * 2 if bidirectional else num_layers, 1, lstm_model.hidden_layer_size))
+                        pred = lstm_model(future_X.permute(1, 0, 2))[0].item()
+                        forecast.append(pred)
+
+                        if i < len(future_exog_scaled):
+                            next_exog = future_exog_scaled[i].reshape(1, 1, -1)
+                        else:
+                            next_exog = future_exog_scaled[-1].reshape(1, 1, -1)  # Use the last known exog value if out of range
+
+                        # Concatenate the predicted value with the next exogenous variables
+                        next_pred = np.array([[pred]])
+                        next_input = np.hstack((next_pred, next_exog.reshape(1, -1)))  # Ensure matching dimensions
+                        next_input = next_input.reshape(1, 1, -1)  # Reshape to (1, 1, input_size)
+                        future_X = torch.cat((future_X[:, 1:, :], torch.tensor(next_input, dtype=torch.float32)), dim=1)
+
+                forecast = scaler.inverse_transform(np.array(forecast).reshape(-1, 1)).flatten()
+                # mape_lstm = calculate_mape(y_true_lstm, forecast)
+                results['LSTM'] = [train_mape,train_rmse] + list(forecast)
+                train_preds = train_preds.tolist()
+                train_preds.append((train_preds[-1]+1.5))
+                train_preds = pd.Series(train_preds) 
+                model_predictions['LSTM'] = train_preds 
+                st.session_state['LSTM_model'] = lstm_model
+                st.session_state['LSTM_model pred'] = forecast
+                st.success("LSTM model fitted successfully.")
+
+        if multivariate_bass_check:
+            with st.spinner("Fitting Multivariate BASS model..."):           
+                initial_params = [0.01, 0.1, max(final_df[target_variable])] + [0.01] * len(exog_vars)
+                bounds = ([0, 0, 0] + [-np.inf]*len(exog_vars), [1, 1, np.inf] + [np.inf]*len(exog_vars))
+
+                # Fit the model with bounds to improve parameter estimation
+                params, cov = curve_fit(
+                lambda t, p, q, m, *betas: bass_model_with_exog(t, p, q, m, *betas, exogs=[final_df[var].values for var in exog_vars]),
+                np.arange(len(final_df[target_variable])),
+                final_df[target_variable].values,
+                p0=initial_params,
+                bounds=bounds
+            )
+
+                # Extract the parameters
+                p, q, m, *betas = params
+                t = np.arange(len(np.arange(len(final_df[target_variable]))))
+                # Calculate the model predictions
+                y_pred = bass_model_with_exog(t, p, q, m, *betas, exogs=[final_df[var].values for var in exog_vars])
+
+                # # Calculate MAPE
+                mape_bass = calculate_mape(final_df[target_variable].values, y_pred)
+                rmse_bass = calculate_rmse(final_df[target_variable].values, y_pred)
+
+                forecast_steps = len(forecast_df)
+                t_forecast = np.arange(len(final_df[target_variable]), len(final_df[target_variable]) + forecast_steps)
+                exogs_forecast = [forecast_df[var].values for var in exog_vars]
+
+                # # Forecasted values
+                forecast_y = bass_model_with_exog(t_forecast, p, q, m, *betas, exogs=exogs_forecast)   
+                results['Multi BASS'] = [mape_bass,rmse_bass] + list(forecast_y[:forecast_periods]) 
+                model_predictions['Multi BASS'] = y_pred 
+                st.session_state['Multi BASS_model pred'] = forecast_y
+                st.session_state['Multi BASS_model'] = params
+                st.session_state['Multi BASS_cov'] = cov
+                st.success("Multi Bass model fitted successfully.")
+                
+        if multivariate_logistic_check:   
+            with st.spinner("Fitting Multivariate Logistic model..."): 
+            
+                initial_params = [max(final_df[target_variable]), 1, len(final_df[target_variable]) / 2] + [0.01] * len(exog_vars)
+                bounds = ([0, 0, 0] + [-np.inf]*len(exog_vars), [np.inf, np.inf, len(final_df[target_variable])] + [np.inf]*len(exog_vars))
+
+                # Fit the logistic growth model with exogenous variables
+                params, cov = curve_fit(lambda t, L, k, x0, *betas: logistic_growth_with_exog(t, L, k, x0, *betas, exogs=[final_df[var].values for var in exog_vars]), np.arange(len(final_df[target_variable])), final_df[target_variable].values, p0=initial_params, bounds=bounds)
+
+                # Extract the parameters
+                L, k, x0, *betas = params
+                t = np.arange(len(np.arange(len(final_df[target_variable]))))
+                # Calculate the model predictions
+                y_pred = logistic_growth_with_exog(t, L, k, x0, *betas, exogs=[final_df[var].values for var in exog_vars])
+
+                # Calculate MAPE
+                train_mape = calculate_mape(final_df[target_variable].values, y_pred)
+                train_rmse = calculate_rmse(final_df[target_variable].values, y_pred)
+
+                forecast_steps = len(forecast_df)
+                t_forecast = np.arange(len(final_df[target_variable]), len(final_df[target_variable]) + forecast_steps)
+                exogs_forecast = [forecast_df[var].values for var in exog_vars]
+
+                # Forecasted values
+                forecast_y = logistic_growth_with_exog(t_forecast, L, k, x0, *betas, exogs=exogs_forecast)
+                results['Multi Logistic'] = [train_mape,train_rmse] + list(forecast_y[:forecast_periods]) 
+                model_predictions['Multi Logistic'] = y_pred 
+                st.session_state['Multi logistic_model pred'] = forecast_y
+                st.session_state['Multi logistic_model'] = params
+                st.session_state['Multi logistic_cov'] = cov
+                st.success("Multivariate Logistic model fitted successfully.")
+                
+        if univariate_logistic_check: 
+            with st.spinner("Fitting Univariate Logistic model..."): 
+                initial_params = [max(final_df[target_variable]), 1, len(final_df[target_variable]) / 2]
+                bounds = ([0, 0, 0], [np.inf, np.inf, len(final_df[target_variable])])
+
+                # Fit the univariate logistic growth model
+                params, cov = curve_fit(logistic_growth, np.arange(len(final_df[target_variable])), final_df[target_variable].values, p0=initial_params, bounds=bounds)
+
+                # Extract the parameters
+                L, k, x0 = params
+                t = np.arange(len(np.arange(len(final_df[target_variable]))))
+                # Calculate the model predictions
+                y_pred = logistic_growth(t, L, k, x0)
+
+                # Calculate MAPE
+                train_mape = calculate_mape(final_df[target_variable].values, y_pred)
+                train_rmse = calculate_rmse(final_df[target_variable].values, y_pred)
+                # Forecasting
+                forecast_steps = len(forecast_df)
+                t_forecast = np.arange(len(final_df[target_variable]), len(final_df[target_variable]) + forecast_steps)
+
+                # Forecasted values
+                forecast_y = logistic_growth(t_forecast, L, k, x0)
+                results['Uni Logistic'] = [train_mape,train_rmse] + list(forecast_y[:forecast_periods]) 
+                model_predictions['Uni Logistic'] = y_pred
+                st.session_state['Uni logistic_model pred'] = forecast_y
+                st.session_state['Uni logistic_model'] = params
+                st.session_state['Uni logistic_cov'] = cov
+                st.success("Univariate Logistic model fitted successfully.")
+
+                
+        if univariate_bass_check:
+            with st.spinner("Fitting Univariate Bass model..."): 
+                 # Initial parameter guesses
+                initial_params = [0.01, 0.1, max(final_df[target_variable])]
+                bounds = ([0, 0, 0], [1, 1, np.inf])
+
+                # Fit the univariate Bass model
+                params, _ = curve_fit(bass_model_univariate, np.arange(len(final_df[target_variable])), final_df[target_variable].values, p0=initial_params, bounds=bounds)
+
+                # Extract the parameters
+                p, q, m = params
+                t = np.arange(len(np.arange(len(final_df[target_variable]))))
+                # Calculate the model predictions
+                y_pred = bass_model_univariate(t, p, q, m)
+
+                # Calculate MAPE
+                train_mape = calculate_mape(final_df[target_variable].values, y_pred)
+                train_rmse = calculate_rmse(final_df[target_variable].values, y_pred)
+                # Forecasting
+                forecast_steps = len(forecast_df)
+                t_forecast = np.arange(len(final_df[target_variable]), len(final_df[target_variable]) + forecast_steps)
+
+                # Forecasted values
+                forecast_y = bass_model_univariate(t_forecast, p, q, m)
+                results['Uni Bass'] = [train_mape,train_rmse] + list(forecast_y[:forecast_periods]) 
+                model_predictions['Uni Bass'] = y_pred
+                st.session_state['Uni Bass_model pred'] = forecast_y
+                st.session_state['Uni Bass_model'] = params
+                st.session_state['Uni Bass_cov'] = cov
+                st.success("Univariate Bass model fitted successfully.")
+
+        if varima_check:
+            with st.spinner("Fitting VARIMA model..."):
+                # Perform Granger Causality Tests
+                granger_results = perform_granger_causality_tests(final_df, target_variable)
+                sorted_granger_results = sorted(granger_results.items(), key=lambda x: x[1])
+                best_predictors = [target_variable] + [var for var, p_value in sorted_granger_results if p_value < 0.05]
+
+                # Prepare the data for VARIMA model
+                endog = final_df[best_predictors]
+                forecast_endog = forecast_df[best_predictors]
+
+                model_fit = varima_model(endog, order=(p_vma, d_vma, q_vma))
+                y_true = endog[target_variable]  # Excluding last value for validation
+                y_pred = model_fit.fittedvalues[target_variable]
+                residuals = y_true - y_pred
+
+                mape = calculate_mape(y_true, y_pred)
+                rmse = calculate_rmse(y_true, y_pred)
+                forecast = model_fit.get_forecast(steps=forecast_periods, exog=forecast_endog)
+                forecast_values = forecast.predicted_mean[target_variable]
+                # lower_bound, upper_bound = forecast.conf_int(alpha=0.05).iloc[:, 0], forecast.conf_int(alpha=0.05).iloc[:, 1]
+                results['VARIMA'] = [mape,rmse] + list(forecast_values)
+                model_predictions['VARIMA'] = y_pred
+                st.session_state['VARIMA_model'] = model_fit
+                st.session_state['VARIMA_forecast_values'] = forecast_values
+                st.session_state['VARIMA_forecast'] = forecast
+                st.success("VARIMA model fitted successfully.")
+        if prophet_check:
+            with st.spinner("Fitting Prophet model..."):
+                model = Prophet(
+                    yearly_seasonality=yearly_seasonality,
+                    seasonality_mode=seasonality_mode
+                ).add_seasonality(name='monthly', period=period, fourier_order=fourier_order)
+                
+                # Remove duplicates in exog_vars
+                exog_vars = list(set(exog_vars))
+                exog_vars.append(target_variable)
+                
+                train_df = prophet_new_df.loc[:, ['Month'] + exog_vars]
+                train_df = train_df.rename(columns={'Month': 'ds', target_variable: 'y'})
+                for exog in exog_vars:
+                    if exog != target_variable:
+                        model.add_regressor(exog)
+                model.fit(train_df)
+
+                # Prepare the forecast data
+                forecast_exog = forecast_df.loc[:, ['Month']+exog_vars]
+                forecast_exog = forecast_exog.rename(columns={'Month': 'ds'}) 
+
+                # Make predictions
+                forecast = model.predict(forecast_exog)
+                forecasted_y_hat = forecast[['ds', 'yhat']]
+
+                # Calculate the MAPE for the training set
+                train_predictions = model.predict(train_df)
+                mape = calculate_mape(train_df['y'], train_predictions['yhat'])  
+                rmse = calculate_rmse(train_df['y'], train_predictions['yhat'])  
+                forecast = forecasted_y_hat.head(forecast_periods)  
+                results['Prophet'] = [mape,rmse] + list(forecast['yhat'])
+                model_predictions['Prophet'] = train_predictions['yhat']
+                st.session_state['Prophet_model'] = model
+                st.session_state['Prophet_forecast'] = forecast
+                st.session_state['Prophet_regressor_coefficients'] = regressor_coefficients(model)
+                st.success("Prophet model fitted successfully.")              
+            
+        if results:
+            result_df = pd.DataFrame(results, index=["MAPE","RMSE"] + [f"Prediction {i+1}" for i in range(forecast_periods)])
+            
+            # Create columns for side-by-side display
+            col1, col2 = st.columns([1, 2])
+            
+            with col1:
+                st.write("### Results Table")
+                st.dataframe(result_df)
+                excel_data = convert_df_to_excel(result_df)
+                st.download_button(
+                    label="Download Results as Excel",
+                    data=excel_data,
+                    file_name="model_results.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
+
+            with col2:
+                st.write("### Model Predictions and Forecasts")
+                # Plotting
+                fig = go.Figure()
+
+                # Actual values
+                fig.add_trace(go.Scatter(
+                    x=new_df.index,
+                    y=new_df[target_variable],
+                    mode='lines',
+                    name='Actual',
+                    line=dict(color='blue', width=2)
+                ))
+
+                # Predictions and Forecasts for each model
+                for model_name, values in results.items():
+                    mape,rmse, *forecast = values
+                    y_pred = model_predictions[model_name]
+                    y_pred_smooth_x, y_pred_smooth_y = smooth_curve(new_df.index, y_pred)
+                    forecast_smooth_x, forecast_smooth_y = smooth_curve(forecast_df.index[:forecast_periods], forecast)
+
+                    fig.add_trace(go.Scatter(
+                        x=y_pred_smooth_x,
+                        y=y_pred_smooth_y,
+                        mode='lines',
+                        name=f'{model_name} Predictions',
+                        line=dict(width=2)
+                    ))
+
+                    fig.add_trace(go.Scatter(
+                        x=forecast_smooth_x,
+                        y=forecast_smooth_y,
+                        mode='lines',
+                        name=f'{model_name} Forecast',
+                        line=dict(dash='dash', width=2)
+                    ))
+
+                fig.update_layout(
+                    title='Time Series Predictions and Forecasts',
+                    xaxis_title='Date',
+                    yaxis_title=target_variable,
+                    legend_title='Legend'
+                )
+
+                st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.warning("No models were selected.")
+            
+
+    alpha = st.number_input("Enter alpha value (default is 0.05)", min_value=0.01, max_value=0.99, value=0.05, step=0.01)
+    st.write("### Model Summaries")
+    selected_model_summary = st.selectbox("Select the model summary to view", ["Auto ARIMA","Exponential Smoothing", "SARIMAX","XGBoost", "LSTM", "Multivariate BASS","Multivariate Logistic","Univariate Bass", "Univariate Logistic","VARIMA","Prophet"])
+    if st.button("Show Summary"):
+        if selected_model_summary == "Auto ARIMA":
+            st.text(st.session_state['Auto_ARIMA_model'].summary())
+            forecast, conf_int = st.session_state['Auto_ARIMA_model'].predict(n_periods=forecast_periods, X=forecast_df[exog_vars].head(forecast_periods), return_conf_int=True, alpha=alpha)
+            # Display the time series forecast in a table
+            forecast_df = pd.DataFrame({
+                "Period": range(1, forecast_periods + 1),
+                "Forecast": forecast,
+                "Lower Confidence Interval": conf_int[:, 0],
+                "Upper Confidence Interval": conf_int[:, 1]
+            })
+            st.write(forecast_df)
+
+        elif selected_model_summary == "Exponential Smoothing":
+            st.text(st.session_state['Exponential_Smoothing_model'].summary())
+            forecast = st.session_state['Exponential_Smoothing_forecast']
+            lower_bound, upper_bound = st.session_state['Exponential_Smoothing_conf_int']
+            forecast_df = pd.DataFrame({
+                "Period": range(1, forecast_periods + 1),
+                "Forecast": forecast,
+                "Lower Confidence Interval": lower_bound,
+                "Upper Confidence Interval": upper_bound
+            })
+            st.write(forecast_df)
+
+        elif selected_model_summary == "SARIMAX":
+            st.text(st.session_state['SARIMAX_model'].summary())
+            predictions_future = st.session_state['SARIMAX_model'].get_forecast(steps=forecast_periods, exog=forecast_df[exog_vars].head(forecast_periods))
+            predicted_mean_future = predictions_future.predicted_mean
+            predicted_ci_future = predictions_future.conf_int(alpha=alpha)
+            # Display the time series forecast in a table
+            forecast_df_sarimax = pd.DataFrame({
+                "Period": range(1, forecast_periods + 1),
+                "Forecast": predicted_mean_future,
+                "Lower Confidence Interval": predicted_ci_future.iloc[:, 0],
+                "Upper Confidence Interval": predicted_ci_future.iloc[:, 1]
+            })
+            st.write(forecast_df_sarimax)
+        elif selected_model_summary == "XGBoost":
+            st.text("XGBoost Model Summary:")
+            # Display feature importances
+            st.write("#### Feature Importances:")
+            feature_importances = st.session_state['XGBoost_model'].feature_importances_
+            exog_vars = st.session_state['exog_vars']
+            importance_df = pd.DataFrame({
+                "Feature": exog_vars,
+                "Importance": feature_importances
+            }).sort_values(by="Importance", ascending=False)
+            st.write(importance_df)
+
+            # Create confidence intervals for XGBoost forecast
+            forecast_xgboost = st.session_state['forecast_xgboost'] 
+            se = np.std(forecast_xgboost) / np.sqrt(len(forecast_xgboost))  # Standard error of the forecast
+            ci_bounds = norm.ppf(1 - alpha / 2) * se
+            lower_ci = forecast_xgboost - ci_bounds
+            upper_ci = forecast_xgboost + ci_bounds
+
+            # Display the time series forecast in a table
+            forecast_df_xgboost = pd.DataFrame({
+                "Period": range(1, forecast_periods + 1),
+                "Forecast": forecast_xgboost,
+                "Lower Confidence Interval": lower_ci,
+                "Upper Confidence Interval": upper_ci
+            })
+            st.write(forecast_df_xgboost)   
+
+        elif selected_model_summary == "LSTM":
+            st.text("LSTM Model Summary:")
+            # Display the model architecture
+            st.write("#### Model Architecture:")
+            st.text(st.session_state['LSTM_model'])
+
+            # Display key parameters and learned weights
+            st.write("#### Learned Weights and Biases:")
+            for name, param in st.session_state['LSTM_model'].named_parameters():
+                if 'weight' in name:
+                    st.write(f"{name} - Weights: {param.data.shape}")
+                elif 'bias' in name:
+                    st.write(f"{name} - Biases: {param.data.shape}")
+
+            forecast = st.session_state['LSTM_model pred']
+            se = np.std(forecast) / np.sqrt(len(forecast))  # Standard error of the forecast
+            ci_bounds = norm.ppf(1 - alpha / 2) * se
+            lower_ci = forecast - ci_bounds
+            upper_ci = forecast + ci_bounds
+
+            # Display the time series forecast in a table
+            forecast_df_lstm = pd.DataFrame({
+                "Period": range(1, forecast_periods + 1),
+                "Forecast": forecast,
+                "Lower Confidence Interval": lower_ci,
+                "Upper Confidence Interval": upper_ci
+            })
+            st.write(forecast_df_lstm) 
+
+        elif selected_model_summary == "Multivariate BASS":
+            params = st.session_state['Multi BASS_model']
+            cov = st.session_state['Multi BASS_cov']
+            forecast_y = st.session_state['Multi BASS_model pred']
+            lower_bounds, upper_bounds = calculate_confidence_intervals(params, cov, alpha)
+
+            summary_text = f"""
+            ### BASS Model Parameters Summary
+
+            #### Core Parameters:
+            - **p (Coefficient of Innovation)**: {params[0]:.4f} (95% CI: {lower_bounds[0]:.4f} - {upper_bounds[0]:.4f})
+            - **q (Coefficient of Imitation)**: {params[1]:.4f} (95% CI: {lower_bounds[1]:.4f} - {upper_bounds[1]:.4f})
+            - **m (Market Potential)**: {params[2]:.4f} (95% CI: {lower_bounds[2]:.4f} - {upper_bounds[2]:.4f})
+
+            #### Exogenous Variables Coefficients:
+            """
+            st.markdown(summary_text)
+            summary_text=""
+            for i, exog_var in enumerate(exog_vars):
+                summary_text += f"- **{exog_var}**: {params[3 + i]:.4f} (95% CI: {lower_bounds[3 + i]:.4f} - {upper_bounds[3 + i]:.4f})\n"
+
+            st.markdown(summary_text)
+
+            forecast_df_bass = pd.DataFrame({
+                "Period": range(1, forecast_periods + 1),
+                "Forecast": forecast_y[:forecast_periods],
+                "Lower Confidence Interval": forecast_y[:forecast_periods] - np.std(forecast_y[:forecast_periods]) * norm.ppf(1 - alpha / 2),
+                "Upper Confidence Interval": forecast_y[:forecast_periods] + np.std(forecast_y[:forecast_periods]) * norm.ppf(1 - alpha / 2)
+            })
+            st.write(forecast_df_bass)
+
+        elif selected_model_summary == "Multivariate Logistic":
+            params = st.session_state['Multi logistic_model']
+            cov = st.session_state['Multi logistic_cov']
+            forecast_y = st.session_state['Multi logistic_model pred']
+            lower_bounds, upper_bounds = calculate_confidence_intervals(params, cov, alpha)
+
+            summary_text = f"""
+            ### Logistic Model Parameters Summary
+
+            #### Core Parameters:
+            - **L (Carrying Capacity)**: {params[0]:.4f} (95% CI: {lower_bounds[0]:.4f} - {upper_bounds[0]:.4f})
+            - **k (Growth Rate)**: {params[1]:.4f} (95% CI: {lower_bounds[1]:.4f} - {upper_bounds[1]:.4f})
+            - **x0 (Midpoint)**: {params[2]:.4f} (95% CI: {lower_bounds[2]:.4f} - {upper_bounds[2]:.4f})
+
+            #### Exogenous Variables Coefficients:
+            """
+            st.markdown(summary_text)
+            summary_text = ""
+            for i, exog_var in enumerate(exog_vars):
+                summary_text += f"- **{exog_var}**: {params[3 + i]:.4f} (95% CI: {lower_bounds[3 + i]:.4f} - {upper_bounds[3 + i]:.4f})\n"
+
+            st.markdown(summary_text)
+
+            forecast_df_logistic = pd.DataFrame({
+                "Period": range(1, forecast_periods + 1),
+                "Forecast": forecast_y[:forecast_periods],
+                "Lower Confidence Interval": forecast_y[:forecast_periods] - np.std(forecast_y[:forecast_periods]) * norm.ppf(1 - alpha / 2),
+                "Upper Confidence Interval": forecast_y[:forecast_periods] + np.std(forecast_y[:forecast_periods]) * norm.ppf(1 - alpha / 2)
+            })
+            st.write(forecast_df_logistic)   
+
+
+        elif selected_model_summary == "Univariate Bass":
+            params = st.session_state['Uni Bass_model']
+            cov = st.session_state['Uni Bass_cov']
+            forecast_y = st.session_state['Uni Bass_model pred']
+            lower_bounds, upper_bounds = calculate_confidence_intervals(params, cov, alpha)
+
+            summary_text = f"""
+            ### Univariate BASS Model Parameters Summary
+
+            #### Core Parameters:
+            - **p (Coefficient of Innovation)**: {params[0]:.4f} (95% CI: {lower_bounds[0]:.4f} - {upper_bounds[0]:.4f})
+            - **q (Coefficient of Imitation)**: {params[1]:.4f} (95% CI: {lower_bounds[1]:.4f} - {upper_bounds[1]:.4f})
+            - **m (Market Potential)**: {params[2]:.4f} (95% CI: {lower_bounds[2]:.4f} - {upper_bounds[2]:.4f})
+            """
+            st.markdown(summary_text)
+
+            forecast_df_unibass = pd.DataFrame({
+                "Period": range(1, forecast_periods + 1),
+                "Forecast": forecast_y[:forecast_periods],
+                "Lower Confidence Interval": forecast_y[:forecast_periods] - np.std(forecast_y[:forecast_periods]) * norm.ppf(1 - alpha / 2),
+                "Upper Confidence Interval": forecast_y[:forecast_periods] + np.std(forecast_y[:forecast_periods]) * norm.ppf(1 - alpha / 2)
+            })
+            st.write(forecast_df_unibass)
+
+        elif selected_model_summary == "Univariate Logistic":
+            params = st.session_state['Uni logistic_model']
+            cov = st.session_state['Uni logistic_cov']
+            forecast_y = st.session_state['Uni logistic_model pred']
+            lower_bounds, upper_bounds = calculate_confidence_intervals(params, cov, alpha)
+
+            summary_text = f"""
+            ### Logistic Model Parameters Summary
+
+            #### Core Parameters:
+            - **L (Carrying Capacity)**: {params[0]:.4f} (95% CI: {lower_bounds[0]:.4f} - {upper_bounds[0]:.4f})
+            - **k (Growth Rate)**: {params[1]:.4f} (95% CI: {lower_bounds[1]:.4f} - {upper_bounds[1]:.4f})
+            - **x0 (Midpoint)**: {params[2]:.4f} (95% CI: {lower_bounds[2]:.4f} - {upper_bounds[2]:.4f})
+            """
+            st.markdown(summary_text)
+
+            forecast_df_logistic = pd.DataFrame({
+                "Period": range(1, forecast_periods + 1),
+                "Forecast": forecast_y[:forecast_periods],
+                "Lower Confidence Interval": forecast_y[:forecast_periods] - np.std(forecast_y[:forecast_periods]) * norm.ppf(1 - alpha / 2),
+                "Upper Confidence Interval": forecast_y[:forecast_periods] + np.std(forecast_y[:forecast_periods]) * norm.ppf(1 - alpha / 2)
+            })
+            st.write(forecast_df_logistic)
+
+
+        elif selected_model_summary == "VARIMA":
+            st.text(st.session_state['VARIMA_model'].summary())
+            forecast_values = st.session_state['VARIMA_forecast_values']
+            forecast = st.session_state['VARIMA_forecast']
+            lower_bound, upper_bound = forecast.conf_int(alpha=alpha).iloc[:, 0], forecast.conf_int(alpha=0.05).iloc[:, 1]
+            forecast_df = pd.DataFrame({
+                "Period": range(1, forecast_periods + 1),
+                "Forecast": forecast_values,
+                "Lower Confidence Interval": lower_bound,
+                "Upper Confidence Interval": upper_bound
+            })
+            st.write(forecast_df)
+        elif selected_model_summary == "Prophet":
+            st.text("Prophet Model Summary:")
+
+            # Display the model parameters
+            st.write("#### Model Parameters:")
+            st.write(f"Yearly Seasonality: {st.session_state['Prophet_model'].yearly_seasonality}")
+            st.write(f"Seasonality Mode: {st.session_state['Prophet_model'].seasonality_mode}")
+
+            # Display the coefficients for exogenous variables
+            st.write("#### Exogenous Variable Coefficients:")
+            regressor_coef = st.session_state['Prophet_regressor_coefficients']
+            st.write(regressor_coef[['regressor', 'regressor_mode', 'coef']].sort_values('coef'))
+
+            # Create confidence intervals for Prophet forecast
+            forecast = st.session_state['Prophet_forecast']['yhat'].values
+            se = np.std(forecast) / np.sqrt(len(forecast))  # Standard error of the forecast
+            ci_bounds = norm.ppf(1 - alpha / 2) * se
+            lower_ci = forecast - ci_bounds
+            upper_ci = forecast + ci_bounds
+
+            # Display the time series forecast in a table
+            forecast_df_prophet = pd.DataFrame({
+                "Period": range(1, forecast_periods + 1),
+                "Forecast": forecast,
+                "Lower Confidence Interval": lower_ci,
+                "Upper Confidence Interval": upper_ci
+            })
+            st.write(forecast_df_prophet) 
+else:
+    st.info("Please upload a CSV or Excel file to proceed.")
+            
+   
+            
