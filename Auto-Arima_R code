@@ -1,0 +1,376 @@
+******Segment forecast*****
+
+library(readxl) 
+library(tseries)
+library(forecast)
+library(xlsx)
+library(lmtest)
+library(sandwich)
+library(openxlsx)
+
+setwd("C:/Users/cmandar/Desktop/China premium/01_Short term forecast/202405_May")
+
+### data loading###
+China_Seg<-read_excel("Premium_May_2024_v1.0.xlsx",
+                      sheet = "Input_R")
+
+#China_Seg <- read_excel(file.choose(), sheet = "Input_R")
+
+############################################### PREMIUM ########################################################
+
+###################################### BCPR ####################################################
+
+Input1<-China_Seg[,c("BCPR","SEAS_BCPR","BCPR_TPI","BCPR_LC","BCPR_PA",
+                     "NEWYEAR","TREND6","COVID","CHIPCAR","GDP","CPI")]
+#trend1->6->1->6
+train1=Input1[1:136,]
+test1=Input1[137:156,]
+
+###Converting to timeseries###
+tsBCPR<-ts(train1$BCPR,start = c(2013,1),end = c(2024,4),frequency = 12)
+tsBCPR <- tsclean(tsBCPR)
+
+### MODEL TESTS ###gdp, cpi added, cpi remo
+m1=auto.arima(tsBCPR,seasonal = F,stepwise = T,approximation = T,
+              xreg = as.matrix(train1[c(2,6,7,8,9,10)]))
+bcprcoef = coeftest(m1)
+bcprcoef
+
+### Forecast ##
+f1<-forecast(m1,xreg =as.matrix(test1[c(2,6,7,8,9,10)]))
+plot(f1)
+points(index(tsBCPR),f1$fitted,col="red","l")
+exp(f1$fitted)
+BCPRFORECAST <- exp(f1$mean)
+BCPRFORECAST
+
+###################################### CDPR ##########################################
+
+Input2<-China_Seg[,c("CDPR", "SEAS_CDPR", "CDPR_TPI", "CDPR_NE","NEWYEAR",
+                     "TRENDCD","COVID","CHIPCAR","GDP","CPI","CDQ1","CDQ2",
+                     "CDQ3","DISPOSABLE INCOME")]
+#Dispo added not considered
+train2=Input2[25:136,]
+test2=Input2[137:156,]
+
+###Converting to timeseries###
+tsCDPR<-ts(train2$CDPR,start = c(2015,1),end = c(2024,4),frequency = 12)
+tsCDPR <- tsclean(tsCDPR)
+
+### MODEL TESTS ###
+m2=auto.arima(tsCDPR,seasonal = F,stepwise = T,approximation = T,
+              xreg = as.matrix(train2[c(2,5,6,7,8,9,10,11,12,13)]))
+cdprcoef = coeftest(m2)
+cdprcoef
+
+### Forecast ###
+f2<-forecast(m2,xreg = as.matrix(test2[c(2,5,6,7,8,9,10,11,12,13)]))
+plot(f2)
+points(index(tsCDPR),f2$fitted,col="red","l")
+CDPRFORECAST <- exp(f2$mean)
+CDPRFORECAST
+
+###################################### DEPR #######################################
+
+Input3<-China_Seg[,c("DEPR","SEAS_DEPR","DEPR_TPI","DEPR_PA","TREND2","NEWYEAR",
+                     "COVID","CHIPCAR","GDP","CPI","DISPOSABLE INCOME")]
+#Dispo nc, #trend1->6->2
+train3=Input3[25:136,]
+test3=Input3[137:156,]
+
+###Converting to timeseries###
+tsDEPR<-ts(train3$DEPR,start = c(2015,1),end = c(2024,4),frequency = 12)
+#tsDEPR <- tsclean(tsDEPR)
+
+### MODEL TESTS ###cpi removed
+m3=auto.arima(tsDEPR,seasonal = F,stepwise = T,approximation = T,
+              xreg = as.matrix(train3[c(2,5,6,7,8,9)]))
+deprcoef = coeftest(m3)
+deprcoef
+
+### Forecast ###
+f3<-forecast(m3,xreg =as.matrix(test3[c(2,5,6,7,8,9)]))
+plot(f3)
+points(index(tsDEPR),f3$fitted,col="red","l")
+DEPRFORECAST <- exp(f3$mean)
+DEPRFORECAST
+
+###################################### SPR #########################################
+
+Input4<-China_Seg[,c("SPR", "SEAS_SPR", "DISPOSABLE INCOME",
+                     "SPORTSPR_TPI","TREND1","COVID","CHIPCAR","GDP","CPI")]
+
+train4=Input4[25:136,]
+test4=Input4[137:156,]
+
+###Converting to timeseries###
+tsSPR<-ts(train4$SPR,start = c(2015,1),end = c(2024,4),frequency = 12)
+#tsSPR <- tsclean(tsSPR)
+
+### MODEL TESTS ###
+m4=auto.arima(tsSPR, seasonal = F,stepwise = T,approximation = T,
+              xreg = as.matrix(train4[c(2,4,5,6,7,8,9)]))
+sprcoef = coeftest(m4)
+sprcoef
+
+### Forecast ###
+f4<-forecast(m4,xreg =as.matrix(test4[c(2,4,5,6,7,8,9)]))
+plot(f4)
+points(index(tsSPR),f4$fitted,col="red","l")
+SPRFORECAST <- exp(f4$mean)
+SPRFORECAST
+
+###################################### FPR #########################################
+
+Input5<-China_Seg[,c("FPR", "SEAS_FPR", "FPR_TPI","TREND2","NEWYEAR","COVID",
+                     "CHIPCAR","GDP","CPI")]
+
+train5=Input5[37:136,]
+test5=Input5[137:156,]
+
+###Converting to timeseries###
+tsFPR<-ts(train5$FPR,start = c(2016,1),end = c(2024,4),frequency = 12)
+#tsFPR <- tsclean(tsFPR)  
+
+### MODEL TESTS ###
+m5=auto.arima(tsFPR, seasonal = F,stepwise = T,approximation = T,
+              xreg = as.matrix(train5[c(2,3,4,5,7,8,9)]))
+fprcoef = coeftest(m5)
+fprcoef
+
+### Forecast ###
+f5<-forecast(m5,xreg =as.matrix(test5[c(2,3,4,5,7,8,9)]))
+plot(f5)
+points(index(tsFPR),f5$fitted,col="red","l")
+FPRFORECAST <- exp(f5$mean)
+FPRFORECAST
+
+###################################### LTPU #####################################
+
+Input6<-China_Seg[,c("LTPU", "SEAS_LTPU", "DISPOSABLE INCOME","LTPU_TPI", 
+                     "LTPU_PA","TREND1","CPI","GDP","JUN","NEWYEAR","COVID")]
+#Update month
+train6=Input6[37:136,]
+test6=Input6[137:156,]
+
+###Converting to timeseries###
+tsLTPU<-ts(train6$LTPU,start = c(2016,1),end = c(2024,4),frequency = 12)
+tsLTPU <- tsclean(tsLTPU)
+
+### MODEL TESTS ###
+m6=auto.arima(tsLTPU, seasonal =F,stepwise = T,approximation = T,
+              xreg = as.matrix(train6[c(2,4,6,8,10,11)]))
+ltpucoef = coeftest(m6)
+ltpucoef
+
+### Forecast ###
+f6<-forecast(m6,xreg =as.matrix(test6[c(2,4,6,8,10,11)]))
+plot(f6)
+points(index(tsLTPU),f6$fitted,col="red","l")
+LTPUFORECAST <- exp(f6$mean)
+LTPUFORECAST
+
+###################################### MPU #####################################
+
+Input7<-China_Seg[,c("MPU","SEAS_MPU", "MPU_PA", "MPU_TPI","TRENDMPU","NEWYEAR",
+                     "COVID","CHIPUT","GDP","CPI","MPUQ1","MPUQ2","MPUQ3","QtrMPU")]
+train7=Input7[25:136,]
+test7=Input7[137:156,]
+
+###Converting to timeseries###
+tsMPU<-ts(train7$MPU,start = c(2015,1),end = c(2024,4),frequency = 12)
+#tsMPU <- tsclean(tsMPU)
+
+### MODEL TESTS ###try adding gdp
+m7=auto.arima(tsMPU, seasonal = F,stepwise = T,approximation = T,
+              xreg = as.matrix(train7[c(2,4,5,6,7,11,12,13)]))
+mpucoef = coeftest(m7)
+mpucoef
+
+### Forecast ###
+f7<-forecast(m7,xreg =as.matrix(test7[c(2,4,5,6,7,11,12,13)]))
+plot(f7)
+points(index(tsMPU),f7$fitted,col="red","l")
+MPUFORECAST <- exp(f7$mean)
+MPUFORECAST
+
+###################################### SPU #####################################
+
+Input8<-China_Seg[,c("SPU","SPU_TPI","SPU_NE","DISPOSABLE INCOME", "SEAS_SPU",
+                     "GDP","CPI","TREND3","NEWYEAR","COVID","CHIPCAR","AFTR")]
+#despo nc, trend3->2->3
+train8=Input8[25:136,]
+test8=Input8[137:156,]
+
+###Converting to timeseries###
+tsSPU<-ts(train8$SPU,start = c(2015,1),end = c(2024,4),frequency = 12)
+tsSPU <- tsclean(tsSPU)
+### MODEL TESTS ###covid added,cpi remov 7,# 4 added & removed, check adding 10,11,12
+m8=auto.arima(tsSPU, seasonal = F,stepwise = T,approximation = T,
+              xreg = as.matrix(train8[c(2,3,5,6,8,9,10)]))
+spucoef = coeftest(m8)
+spucoef
+
+### Forecast ###
+f8<-forecast(m8,xreg =as.matrix(test8[c(2,3,5,6,8,9,10)]))
+plot(f8)
+points(index(tsSPU),f8$fitted,col="red","l")
+SPUFORECAST <- exp(f8$mean)
+SPUFORECAST
+
+###################################### LCPU ####################################
+
+Input9<-China_Seg[,c("LCPU","SEAS_LCPU","LCPU_TPI","DISPOSABLE INCOME","LCPU_PA","GDP",
+                     "CPI","NEWYEAR","COVID","CHIPUT","TREND3")]
+#trend3->2->3
+train9=Input9[25:136,]
+test9=Input9[137:156,]
+
+###Converting to timeseries###
+tsLCPU<-ts(train9$LCPU,start = c(2015,1),end = c(2024,4),frequency = 12)
+tsLCPU <- tsclean(tsLCPU)
+
+### MODEL TESTS ###despo removed, covid added, trend3 ->2 removed - added
+m9=auto.arima(tsLCPU, seasonal = F,stepwise = T,approximation = T,
+              xreg = as.matrix(train9[c(2,3,6,7,8,9,10,11)]))
+#9 added, 4 removed
+lcpucoef = coeftest(m9)
+lcpucoef
+
+### Forecast ###
+f9<-forecast(m9,xreg =as.matrix(test9[c(2,3,6,7,8,9,10,11)]))
+plot(f9)
+points(index(tsLCPU),f9$fitted,col="red","l")
+LCPUFORECAST <- exp(f9$mean)
+LCPUFORECAST
+########################### FORECAST SUMMARY ##########################
+
+BCPRF<-f1$mean
+CDPRF<-f2$mean
+DEPRF<-f3$mean
+SPRF<-f4$mean
+FPRF<-f5$mean
+LTPUF<-f6$mean
+MPUF<-f7$mean
+SPUF<-f8$mean
+LCPUF<-f9$mean
+
+#f=cbind(MPUF)
+#tsFCST<-ts(f,start = c(2021,3),end = c(2022,12),frequency = 12)
+#write.xlsx(tsFCST,file = "seg.xlsx",sheetName = "MPU",append = T)
+
+
+
+fit<-cbind(f1$fitted,f2$fitted,f3$fitted,f4$fitted,f5$fitted,f6$fitted,f7$fitted,f8$fitted,f9$fitted)
+#f=cbind(BCPRFORECAST,CDPRFORECAST,DEPRFORECAST,FPRFORECAST,MPUFORECAST,SPUFORECAST,SPRFORECAST,LCPUFORECAST,LTPUFORECAST)
+f=cbind(BCPRF,CDPRF,DEPRF,FPRF,MPUF,SPUF,SPRF,LCPUF,LTPUF)
+tsFCST<-ts(f,start = c(2024,5),end = c(2025,12),frequency = 12)
+
+write.xlsx(tsFCST,file = "Premium_Output_1.0.xlsx",sheetName = "Prem",append = T)
+write.xlsx(fit,file = "Premium_Output_fitted_3.0.xlsx",sheetName = "Prem",append = T)
+#WriteXLS(tsFCST, ExcelFileName = "Premium_Output.xls")
+#write.xlsx(tsFCST,'C:/Users/cmandar/Desktop/China premium/new_file.xlsx')
+#write.xlsx(fit,'C:/Users/cmandar/Desktop/China premium/new_file_fit.xlsx')
+
+
+capture.output(bcprcoef,file = "May'21 coefficients.txt", append=T)
+capture.output(cdprcoef,file = "May'21 coefficients.txt", append=T)
+capture.output(deprcoef,file = "May'21 coefficients.txt", append=T)
+capture.output(fprcoef,file = "May'21 coefficients.txt", append=T)
+capture.output(sprcoef,file = "May'21 coefficients.txt", append=T)
+capture.output(mpucoef,file = "May'21 coefficients.txt", append=T)
+capture.output(spucoef,file = "May'21 coefficients.txt", append=T)
+capture.output(lcpucoef,file = "May'21 coefficients.txt", append=T)
+capture.output(ltpucoef,file = "May'21 coefficients.txt", append=T)
+
+*****Powertrain****
+library(readxl)
+library(tseries)
+library(forecast)
+library(xlsx)
+library(lmtest)
+library(sandwich)
+
+setwd("C:/Users/cmandar/Desktop/China premium/01_Short term forecast/202503_Mar")
+
+
+
+#China_Seg <- read_excel(file.choose(), sheet = "Input_R")
+### data loading###
+China_Seg<-read_excel("BEV_Prem_2025Q1_v1.0.xlsx",
+                      sheet = "Input_R")
+
+############################################### PREMIUM ########################################################
+
+Input1<-China_Seg[,c("INDUSTRY","SEAS_PREMIUM","ENTRY","NEWYEAR","TREND_CR","TIME","GDP",
+                     "DISPOSABLE INCOME","CHIPCAR","COVID")]
+
+train1=Input1[49:122,]
+test1=Input1[123:144,]
+
+###Converting to timeseries###
+tsIPR<-ts(train1$INDUSTRY,start = c(2019,1),end = c(2025,2),frequency = 12)
+#tsIPR <- tsclean(tsIPR)
+### MODEL TESTS ### gdp added -remo
+m1=auto.arima(tsIPR,seasonal = F,stepwise = T,approximation = T,
+              xreg = as.matrix(train1[c(2,3,4,10)]))
+iprcoef = coeftest(m1)
+iprcoef
+
+### Forecast ##
+f1<-forecast(m1,xreg =as.matrix(test1[c(2,3,4,10)]))
+plot(f1)
+points(index(tsIPR),f1$fitted,col="red","l")
+exp(f1$fitted)
+IPRFORECAST <- exp(f1$mean)
+IPRFORECAST
+
+###################################### Tesla ##########################################
+
+Input2<-China_Seg[,c("TESLA","SEAS_TESLA","ENTRYT",
+                     "NEWYEAR","TREND_T","GDP","CDQ1","CDQ2","CDQ3",
+                     "CPI","DISPOSABLE INCOME","CHIPUT","COVID","Qtr1")]
+
+train2=Input2[37:122,]
+test2=Input2[123:144,]
+
+###Converting to timeseries###
+tsTPR<-ts(train2$TESLA,start = c(2018,1),end = c(2025,2),frequency = 12)
+tsTPR <- tsclean(tsTPR)
+### MODEL TESTS ### gdp, despo added, trend remo - both removed
+m2=auto.arima(tsTPR,seasonal = F,stepwise = T,approximation = T,
+              xreg = as.matrix(train2[c(2,3,4,5,7,8,9,13)]))
+tprcoef = coeftest(m2)
+tprcoef
+
+### Forecast ###
+f2<-forecast(m2,xreg = as.matrix(test2[c(2,3,4,5,7,8,9,13)]))
+plot(f2)
+points(index(tsTPR),f2$fitted,col="red","l")
+exp(f2$fitted)
+TPRFORECAST <- exp(f2$mean)
+TPRFORECAST
+
+
+########################### FORECAST SUMMARY ##########################
+
+PIF<-f1$mean
+TPF<-f2$mean
+
+fit<-cbind(f1$fitted,f2$fitted)
+
+f=cbind(PIF,TPF)
+tsFCST<-ts(f,start = c(2025,3),end = c(2026,12),frequency = 12)
+write.xlsx(tsFCST,file = "Annual_BEV_Prem_v1.xlsx",sheetName = "Annual_BEV_Prem",append = T)
+
+
+capture.output(bcprcoef,file = "May'21 coefficients.txt", append=T)
+capture.output(cdprcoef,file = "May'21 coefficients.txt", append=T)
+capture.output(deprcoef,file = "May'21 coefficients.txt", append=T)
+capture.output(fprcoef,file = "May'21 coefficients.txt", append=T)
+capture.output(sprcoef,file = "May'21 coefficients.txt", append=T)
+capture.output(mpucoef,file = "May'21 coefficients.txt", append=T)
+capture.output(spucoef,file = "May'21 coefficients.txt", append=T)
+capture.output(lcpucoef,file = "May'21 coefficients.txt", append=T)
+capture.output(ltpucoef,file = "May'21 coefficients.txt", append=T)
+
