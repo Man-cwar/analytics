@@ -1,0 +1,116 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.preprocessing import StandardScaler
+from sklearn.cluster import KMeans
+from sklearn.metrics import silhouette_score
+from sklearn.decomposition import PCA
+
+# Load Excel data
+file_path = r"C:\Users\cmandar\Desktop\cluster data.xlsx"
+sheet_name = "Brand_Data"
+
+df = pd.read_excel(file_path, sheet_name=sheet_name)
+
+df = df[df['2025_Result_2'].isin(['Afforadable', 'Premium'])]
+
+df.info()
+
+# Select features for clustering
+feature_cols = ["2025 sales","Avg length","2025 Avg TP"] #,"Average of Length"
+X = df[feature_cols].copy()
+
+# Handle missing values (drop rows with missing features)
+X = X.dropna()
+
+# Scale features - is distance-based, so scaling is CRITICAL. 
+scaler = StandardScaler()
+X_scaled = scaler.fit_transform(X)
+
+X_scaled.shape
+
+# Determine optimal k using elbow and silhouette
+k_min = 2
+k_max = 10
+
+ks = list(range(k_min, k_max + 1))
+inertias = []   #Inertia: Sum of squared distances to closest centroid
+silhouettes = []   # Silhouette Score: How similar a point is to its own cluster vs other clusters
+
+for k in ks:
+    kmeans = KMeans(n_clusters=k, n_init=10, random_state=42)
+    labels = kmeans.fit_predict(X_scaled)
+    inertias.append(kmeans.inertia_) 
+    silhouettes.append(silhouette_score(X_scaled, labels))
+
+
+#fig, axes = plt.subplots(1, 2, figsize=(12, 4))
+fig, ax1 = plt.subplots(figsize=(12, 5))
+
+# Plot Inertia (Elbow Method)
+color = 'tab:blue'
+ax1.set_xlabel('Number of Clusters (k)')
+ax1.set_ylabel('Inertia (Elbow)', color=color)
+ax1.plot(ks, inertias, marker='o', color=color)
+ax1.tick_params(axis='y', labelcolor=color)
+ax1.set_title('Optimal k Analysis: Elbow Method & Silhouette Score')
+
+# Plot Silhouette Score (Secondary Axis)
+ax2 = ax1.twinx()  
+color = 'tab:red'
+ax2.set_ylabel('Silhouette Score', color=color)
+ax2.plot(ks, silhouettes, marker='s', linestyle='--', color=color)
+ax2.tick_params(axis='y', labelcolor=color)
+
+plt.grid(True)
+plt.tight_layout()
+plt.show()
+
+
+
+
+#best_k = ks[int(np.argmax(silhouettes))]
+best_k = 5
+# Fit final KMeans model using the selected k
+final_k = best_k  
+
+final_kmeans = KMeans(n_clusters=final_k, n_init=10, random_state=42)
+final_labels = final_kmeans.fit_predict(X_scaled)
+
+# Attach labels back to the original dataframe (aligned with dropped rows)
+result = df.loc[X.index].copy()
+result["cluster"] = final_labels
+
+cluster_names = {
+    0: 'Low sell low price',
+    1: 'Luxury',
+    2: 'Mass market',
+    3: 'Afforadable',
+    4: 'Premium'
+}
+
+result['Segment_Name'] = result['cluster'].map(cluster_names)
+result.head()
+
+# Visualize clusters (2D scatter using selected features)
+plt.figure(figsize=(6, 4))
+#plt.scatter(
+#    result[feature_cols[0]], result[feature_cols[1]],
+#    c=result["cluster"], cmap="tab10",bs=40, alpha=0.8)
+sns.scatterplot(x=result[feature_cols[0]], y=result[feature_cols[-1]],
+                 hue='Segment_Name', data=result, palette='viridis', s=100)
+plt.title(f"KMeans Clusters (k={final_k})")
+plt.xlabel(feature_cols[0])
+plt.ylabel(feature_cols[-1])
+plt.legend()
+plt.grid(True, alpha=0.2)
+plt.show()
+
+
+
+# Export results to Excel
+output_path = r"C:\Users\cmandar\Desktop\cluster_results.xlsx"
+result.to_excel(output_path, index=False)
+output_path
+
