@@ -1,0 +1,285 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from statsmodels.tsa.seasonal import seasonal_decompose
+from statsmodels.tsa.stattools import adfuller, kpss, ccf, grangercausalitytests
+from statsmodels.graphics.tsaplots import plot_acf, plot_pacf
+from sklearn.preprocessing import MinMaxScaler, StandardScaler
+# import missingno as msno 
+import warnings
+# warnings.filterwarnings('ignore')
+
+#####Data import - test train
+sns.set_style("whitegrid")
+plt.rcParams['figure.figsize'] = (12, 6)
+plt.rcParams['axes.titlesize'] = 16
+plt.rcParams['axes.labelsize'] = 12
+plt.rcParams['xtick.labelsize'] = 10
+plt.rcParams['ytick.labelsize'] = 10
+plt.rcParams['legend.fontsize'] = 10
+TARGET_VAR = "Large_Utility"
+EXOG_VARS = [ "GDP", "CPI","GAS_PRICE","DIESEL","Large_Utility_PR", "LARGE UTILITY_NE","LARGE UTILITY_AN",
+             "LARGE UTILITY_TH","LARGE UTILITY_MN","LARGE UTILITY_MD","LARGE UTILITY_PA"]
+
+
+# TARGET_VAR = "B_Car"
+# EXOG_VARS = [
+#     "Saar Industry", "Saar B_Car", "B CAR_PA", "GDP", "GAS_PRICE",
+#     "B_Car_PR", "CPI", "DIESEL", "B CAR_NE", "B CAR_AN",
+#     "B CAR_TH", "B CAR_MD", "B CAR_MN"]
+
+start_date_available = pd.to_datetime("2015-01-01")
+end_date_available = pd.to_datetime("2025-08-01")
+start_date_forecast = pd.to_datetime("2025-09-01")
+end_date_forecast = pd.to_datetime("2035-12-01")
+
+date_range_available = pd.date_range(start=start_date_available, end=end_date_available, freq='MS')
+date_range_forecast = pd.date_range(start=start_date_forecast, end=end_date_forecast, freq='MS')
+full_date_range = pd.date_range(start=start_date_available, end=end_date_forecast, freq='MS')
+
+n_available = len(date_range_available)
+n_forecast = len(date_range_forecast)
+n_full = len(full_date_range)
+
+print(f"Available data points: {n_available} months ({start_date_available.strftime('%Y-%m')} to {end_date_available.strftime('%Y-%m')})")
+print(f"Forecast data points: {n_forecast} months ({start_date_forecast.strftime('%Y-%m')} to {end_date_forecast.strftime('%Y-%m')})")
+
+df_full = pd.read_excel(r"C:\Users\TVELLACK\OneDrive - azureford\Desktop\US_25.2_Model_Input.xlsx",sheet_name='Sheet1')
+df_full['Month'] = pd.to_datetime(df_full['Month'], format='%Y%m')
+df_full = df_full.set_index('Month').sort_index()
+
+
+# --- Simulate Data (REPLACE THIS SECTION WITH YOUR ACTUAL DATA LOADING) ---
+# In a real scenario, you would load your data like this:
+# df_full = pd.read_csv('your_data.csv', parse_dates=['your_date_column'])
+# df_full['your_date_column'] = df_full['your_date_column'].dt.to_period('M').dt.to_timestamp() # Ensure monthly start
+# df_full = df_full.set_index('your_date_column').sort_index()
+#
+# # Split into available and forecast periods based on the index
+# df_available = df_full.loc[start_date_available:end_date_available].copy()
+# df_forecast_exog = df_full.loc[start_date_forecast:end_date_forecast].copy()
+# df_forecast_exog[TARGET_VAR] = np.nan # Ensure target is NaN for forecast period
+
+df_available = df_full.loc[start_date_available:end_date_available].copy()
+df_forecast_exog = df_full.loc[start_date_forecast:end_date_forecast].copy()
+
+df_forecast_exog[TARGET_VAR] = np.nan
+
+print("\n--- Initial Data Snapshot (Available Data) ---")
+print(df_available.head())
+
+### EDA - Univariate
+df_available.info()
+display(df_available[(EXOG_VARS + [TARGET_VAR])].describe())
+# df_cleaned = df_available.copy()
+
+# print("\n--- Outlier Detection and Treatment ---")
+# for col in [TARGET_VAR] + EXOG_VARS:
+#     Q1 = df_cleaned[col].quantile(0.25)
+#     Q3 = df_cleaned[col].quantile(0.75)
+#     IQR = Q3 - Q1
+#     lower_bound = Q1 - 1.5 * IQR
+#     upper_bound = Q3 + 1.5 * IQR
+
+#     outliers_count = df_cleaned[(df_cleaned[col] < lower_bound) | (df_cleaned[col] > upper_bound)].shape[0]
+#     if outliers_count > 0:
+#         print(f"  - Detected {outliers_count} outliers in '{col}'. Capping them.")
+#         df_cleaned[col] = np.where(df_cleaned[col] < lower_bound, lower_bound, df_cleaned[col])
+#         df_cleaned[col] = np.where(df_cleaned[col] > upper_bound, upper_bound, df_cleaned[col])
+test_split_date = pd.to_datetime("2024-08-01")
+df_train1 = df_available.loc[start_date_available:test_split_date].copy()
+df_test1 = df_available.loc[test_split_date + pd.DateOffset(months=1):end_date_available].copy()
+
+print(f"\nShape of df_train1: {df_train1.shape}")
+print(f"Shape of df_test1: {df_test1.shape}")
+print(f"Train period: {df_train1.index.min().strftime('%Y-%m')} to {df_train1.index.max().strftime('%Y-%m')}")
+print(f"Test period: {df_test1.index.min().strftime('%Y-%m')} to {df_test1.index.max().strftime('%Y-%m')}")
+
+df_train=df_train1[EXOG_VARS + [TARGET_VAR]]
+df_test=df_test1[EXOG_VARS + [TARGET_VAR]]
+df_full1=df_full[EXOG_VARS + [TARGET_VAR]]
+
+# --- 2. Univariate Analysis ---
+
+plt.figure(figsize=(15, 15))
+plt.suptitle(f'Time Series Plots of {TARGET_VAR} - Relevant Variables (Inc. Forecast Period)', y=1.02, fontsize=18)
+num_cols = len(df_full1.columns)
+rows = (num_cols + 1) // 2 
+for i, col in enumerate(df_full1.columns):
+    plt.subplot(rows, 2, i + 1)
+    plt.plot(df_full1.index, df_full1[col], label=col)
+    plt.title(f'{col} Over Time')
+    plt.legend()
+plt.tight_layout(rect=[0, 0.03, 1, 0.98])
+plt.show()
+# # --  Train Data -- 
+
+# print("\n--- Univariate Analysis (on Training Data) ---")
+
+# plt.figure(figsize=(15, 15))
+# plt.suptitle(f'Time Series Plots of {TARGET_VAR} - Relevant Variables (Training Data)', y=1.02, fontsize=18)
+# num_cols = len(df_train.columns)
+# rows = (num_cols + 1) // 2 # Arrange plots in 2 columns
+# for i, col in enumerate(df_train.columns):
+#     plt.subplot(rows, 2, i + 1)
+#     plt.plot(df_train.index, df_train[col], label=col)
+#     plt.title(f'{col} Over Time')
+#     plt.legend()
+# plt.tight_layout(rect=[0, 0.03, 1, 0.98])
+# plt.show()
+
+###### --- Seasonal Plots (Example for B_Car by month) ---
+def plot_monthly_seasonal_pattern(df_input, column_name, title_prefix=""):
+    df_temp = df_input.copy()
+    df_temp['month'] = df_temp.index.month
+    df_temp['year'] = df_temp.index.year
+
+    plt.figure(figsize=(12, 6))
+    sns.lineplot(data=df_temp, x='month', y=column_name, hue='year', palette='viridis', marker='o')
+    plt.title(f'{title_prefix} Monthly Seasonal Plot of {column_name}')
+    plt.xlabel('Month')
+    plt.ylabel(column_name)
+    plt.legend(title='Year', bbox_to_anchor=(1.05, 1), loc='upper left')
+    plt.xticks(range(1, 13), ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'])
+    plt.grid(True)
+    plt.tight_layout()
+    plt.show()
+
+plot_monthly_seasonal_pattern(df_train, TARGET_VAR, "Training Data")
+
+plt.figure(figsize=(15, 7))
+sns.boxplot(x=df_train.index.month, y=TARGET_VAR, data=df_train)
+plt.title(f'{TARGET_VAR} Distribution by Month (Training Data)')
+plt.xlabel('Month')
+plt.ylabel(TARGET_VAR)
+plt.show()
+
+plt.figure(figsize=(15, 20))
+plt.suptitle('Distribution of All Variables (Training Data)', y=1.02, fontsize=18)
+num_cols = len(df_train.columns)
+rows = (num_cols + 1) // 2
+for i, col in enumerate(df_train.columns):
+    plt.subplot(rows, 2, i + 1)
+    sns.histplot(df_train[col], kde=True)
+    plt.title(f'Distribution of {col}')
+plt.tight_layout(rect=[0, 0.03, 1, 0.98])
+plt.show()
+
+decomposition = seasonal_decompose(df_train[TARGET_VAR], model='multiplicative', period=12)
+fig = decomposition.plot()
+fig.set_size_inches(12, 8)
+plt.suptitle(f'Seasonal Decomposition of {TARGET_VAR}', y=1.02)
+plt.show()
+
+decomposition = seasonal_decompose(df_train[TARGET_VAR], model='additive', period=12)
+fig = decomposition.plot()
+fig.set_size_inches(12, 8)
+plt.suptitle(f'Seasonal Decomposition of {TARGET_VAR}', y=1.02)
+plt.show()
+
+def run_stationarity_tests(series, name):
+    print(f"\n--- Stationarity Test for: {name} ---")
+    if len(series.dropna()) < 2:
+        print("Not enough data points for stationarity test.")
+        return
+
+    # ADF Test
+    adf_result = adfuller(series.dropna())
+    print(f'ADF Statistic: {adf_result[0]:.2f}')
+    print(f'p-value: {adf_result[1]:.3f}')
+    print('Critical Values:')
+    for key, value in adf_result[4].items():
+        print(f'   {key}: {value:.2f}')
+    if adf_result[1] <= 0.05:
+        print("Conclusion: Series is likely stationary (Reject H0 of unit root)")
+    else:
+        print("Conclusion: Series is likely non-stationary (Fail to Reject H0 of unit root)")
+
+    # KPSS Test
+    # KPSS test requires at least 8 observations
+    if len(series.dropna()) >= 8:
+        kpss_result = kpss(series.dropna(), regression='c', nlags='auto') # 'c' for constant, 'ct' for trend
+        print(f'KPSS Statistic: {kpss_result[0]:.2f}')
+        print(f'p-value: {kpss_result[1]:.3f}')
+        print('Critical Values:')
+        for key, value in kpss_result[3].items():
+            print(f'   {key}: {value:.2f}')
+        if kpss_result[1] <= 0.05:
+            print("Conclusion: Series is likely non-stationary (Reject H0 of stationarity)")
+        else:
+            print("Conclusion: Series is likely stationary (Fail to Reject H0 of stationarity)")
+    else:
+        print("Not enough data for KPSS test.")
+
+
+for col in df_train.columns:
+    run_stationarity_tests(df_train[col], col)
+
+#####----Multi variate
+print(f"\n--- Cross-Correlation Plots ({TARGET_VAR} vs. Exogenous Variables) ---")
+
+def plot_ccf_custom(series1, series2, title_suffix, max_lags_val):
+    series1_clean = series1.dropna()
+    series2_clean = series2.dropna()
+    common_index = series1_clean.index.intersection(series2_clean.index)
+    series1_aligned = series1_clean.loc[common_index]
+    series2_aligned = series2_clean.loc[common_index]
+
+    if len(series1_aligned) < max_lags_val * 2: # Need enough data for meaningful lags
+        print(f"Warning: Not enough common data points for CCF between {series1.name} and {series2.name}. Skipping.")
+        return
+
+    # Using matplotlib.pyplot.xcorr for symmetric CCF
+    plt.figure(figsize=(10, 5))
+    plt.xcorr(series1_aligned, series2_aligned, usevlines=True, maxlags=max_lags_val, normed=True, lw=2)
+    plt.title(f'Cross-Correlation between {TARGET_VAR} and {title_suffix}\n(Positive Lag: {title_suffix} leads {TARGET_VAR})')
+    plt.axhline(0, color='gray', linestyle='--')
+    plt.xlabel('Lag (Months)')
+    plt.ylabel('Correlation')
+    plt.grid(True)
+    plt.show()
+
+# Plot CCF for each exogenous variable against B_Car
+for col in EXOG_VARS:
+    plot_ccf_custom(df_train[TARGET_VAR], df_train[col], col, max_lags_val=24) # Check up to 2 years lag
+
+# --- Scatter Plots ---
+print(f"\n--- Scatter Plots ({TARGET_VAR} vs. Exogenous Variables - Training Data) ---")
+plt.figure(figsize=(15, 20))
+plt.suptitle(f'Scatter Plots: {TARGET_VAR} vs. Exogenous Variables', y=1.02, fontsize=18)
+num_cols = len(EXOG_VARS)
+rows = (num_cols + 1) // 2
+for i, col in enumerate(EXOG_VARS):
+    plt.subplot(rows, 2, i + 1)
+    sns.scatterplot(x=col, y=TARGET_VAR, data=df_train, alpha=0.6)
+    plt.title(f'Scatter Plot: {TARGET_VAR} vs. {col}')
+plt.tight_layout(rect=[0, 0.03, 1, 0.98])
+plt.show()
+
+# --- Granger Causality Test ---
+print(f"\n--- Granger Causality Tests (Exogenous -> {TARGET_VAR} on Training Data) ---")
+max_lags_granger = 12 # Test up to 12 months lag
+for exo_col in EXOG_VARS:
+    print(f"\n--- Testing Granger Causality for {exo_col} on {TARGET_VAR} ---")
+    data_for_granger = df_train[[TARGET_VAR, exo_col]].dropna()
+    if len(data_for_granger) < max_lags_granger + 2:
+        print(f"  Not enough data points ({len(data_for_granger)}) for Granger Causality test with max_lags={max_lags_granger}. Skipping.")
+        continue
+    try:
+        granger_results = grangercausalitytests(data_for_granger, max_lags_granger, verbose=False)
+        p_value = granger_results[max_lags_granger][0]['ssr_ftest'][1]
+        print(f"  P-value for Granger Causality from {exo_col} to {TARGET_VAR} (max lag {max_lags_granger}): {p_value:.3f}")
+        if p_value < 0.05:
+            print(f"  Conclusion: {exo_col} Granger-causes {TARGET_VAR} (at 5% significance level).")
+        else:
+            print(f"  Conclusion: {exo_col} does NOT Granger-cause {TARGET_VAR} (at 5% significance level).")
+    except Exception as e:
+        print(f"  Could not perform Granger Causality test for {exo_col}: {e}")
+
+print("\n--- Correlation Matrix Heatmap (Training Data) ---")
+plt.figure(figsize=(14, 12))
+sns.heatmap(df_train.corr(), annot=True, cmap='coolwarm', fmt=".2f", linewidths=.5)
+plt.title('Correlation Matrix of All Variables (Training Data)')
+plt.show()
+
