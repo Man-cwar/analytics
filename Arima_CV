@@ -160,4 +160,40 @@ for train_index, test_index in tscv.split(cross_validation):
 print("MAPE_Train: {}".format(np.round(np.mean(mape_train)*100,decimals=2)))
 print("MAPE_Validation: {}".format(np.round(np.mean(mape)*100,decimals=2)))
 
+#Model interpretor
+import pandas as pd
+import numpy as np
+from sklearn.ensemble import RandomForestRegressor
+
+# Create synthetic sales data
+np.random.seed(42)
+data = pd.DataFrame({
+    'Fuel_Price': np.random.uniform(3, 5, 100),
+    'Promotion': np.random.uniform(0, 100, 100),
+    'Is_Holiday': np.random.choice([0, 1], 100),
+    'Temp': np.random.uniform(30, 90, 100)
+})
+
+# Sales formula: Base 1000 - (200 * Fuel) + (5 * Promotion) + (300 * Holiday) + noise
+data['Sales'] = 1000 - (200 * data['Fuel_Price']) + (5 * data['Promotion']) + (300 * data['Is_Holiday']) + np.random.normal(0, 50, 100)
+
+# Train the "Black Box" Model
+X = data.drop('Sales', axis=1)
+y = data['Sales']
+model = RandomForestRegressor(n_estimators=100).fit(X, y)
+
+#SHAP (Shapley Additive Explanations)
+import shap
+
+# Initialize Explainer
+explainer = shap.TreeExplainer(model)
+shap_values = explainer.shap_values(X)
+
+# Global Summary Plot
+shap.summary_plot(shap_values, X)
+
+# Local Plot for the first record
+shap.initjs()
+shap.force_plot(explainer.expected_value, shap_values[0,:], X.iloc[0,:])
+
 
