@@ -1,0 +1,126 @@
+import numpy as np
+import pandas as pd
+
+import matplotlib.pyplot as plt
+%matplotlib inline
+from tensorflow import keras
+import math
+from keras.models import Sequential
+from keras.layers import Dense
+from keras.layers import LSTM
+from sklearn.preprocessing import MinMaxScaler
+from sklearn.metrics import mean_squared_error
+
+
+import itertools
+import warnings
+warnings.filterwarnings('ignore')
+
+data = pd.read_excel('Data.xlsx',sheet_name='Data2018')
+data['Month'] = pd.to_datetime(data['Month'])
+data.set_index('Month',inplace=True)
+
+split_len = 40
+train = data[:split_len]
+test = data[split_len:]
+test.head()
+
+scaler = MinMaxScaler(feature_range=(0, 1))
+
+train_data = scaler.fit_transform(train)
+test_data = scaler.fit_transform(test)
+
+print("Shape of train data: " + str(train_data.shape))
+print("Shape of test data: " + str(test_data.shape))
+
+def create_dataset(dataset, look_back=1):
+    dataX, dataY = [], []
+
+    for i in range(len(dataset)-look_back-1):
+        a = dataset[i:(i+look_back), 0]
+        dataX.append(a)
+        dataY.append(dataset[i + look_back, 0])
+    
+    return np.array(dataX), np.array(dataY)
+
+look_back = 3
+trainX, trainY = create_dataset(train_data, look_back)
+testX, testY = create_dataset(test_data, look_back)
+
+print("Shape of train input: " + str(trainX.shape))
+print("Shape of train labels: " + str(trainY.shape))
+print("Shape of test input: " + str(testX.shape))
+print("Shape of test labels: " + str(testY.shape))
+
+trainX = np.reshape(trainX, (trainX.shape[0], 1, trainX.shape[1]))
+testX = np.reshape(testX, (testX.shape[0], 1, testX.shape[1]))
+
+print("Shape of train input: " + str(trainX.shape))
+print("Shape of train labels: " + str(trainY.shape))
+print("Shape of test input: " + str(testX.shape))
+print("Shape of test labels: " + str(testY.shape))
+
+model = Sequential()
+model.add(LSTM(4, input_shape=(1, look_back)))
+model.add(Dense(1))
+model.compile(loss='mean_squared_error', optimizer='adam')
+
+model.fit(trainX, trainY, epochs=100, batch_size=1, verbose=2)
+
+trainPredict = model.predict(trainX)
+testPredict = model.predict(testX)
+
+testPredict[:5]
+
+trainPredict = scaler.inverse_transform(trainPredict)
+trainY = scaler.inverse_transform([trainY])
+testPredict = scaler.inverse_transform(testPredict)
+testY = scaler.inverse_transform([testY])
+
+trainScore = math.sqrt(mean_squared_error(trainY[0], trainPredict[:,0]))
+print('Train Score: %.2f RMSE' % (trainScore))
+testScore = math.sqrt(mean_squared_error(testY[0], testPredict[:,0]))
+print('Test Score: %.2f RMSE' % (testScore))
+
+mape_test = np.round(np.mean(np.abs(testY[0]-testPredict[:,0])/testY[0])*100,2)
+
+mape_train = np.round(np.mean(np.abs(trainY[0]-trainPredict[:,0])/trainY[0])*100,2)
+
+dates = pd.date_range(start='2016-01', freq='MS', periods=len(data.columns)*56)
+dates
+
+trainActual = pd.DataFrame({'Sales': trainY[0]})
+trainActual.index = dates
+
+trainPredictdf = pd.DataFrame({'Sales': trainPredict[:,0]})
+trainPredictdf.index = dates
+
+plt.figure(figsize=(20,5))
+plt.plot(trainActual, color='blue', label='Actual values')
+plt.plot(trainPredictdf, color='red', label='Predicted')
+plt.title('Train data: Precipitation vs Year')
+plt.xlabel('Year')
+plt.ylabel('Precipitation')
+plt.legend(loc='best')
+
+dates = pd.date_range(start='2021-1', freq='MS', periods=len(data.columns)*11)
+dates
+
+freq = 'D'  
+testDates = dates + pd.Timedelta(3, unit=freq)   
+testDates
+
+testActual = pd.DataFrame({'Precipitation': testY[0]})
+testActual.index = testDates
+
+testPredictdf = pd.DataFrame({'Precipitation': testPredict[:,0]})
+testPredictdf.index = testDates
+
+plt.figure(figsize=(20,5))
+plt.plot(testActual, color='orange', label='Actual future values')
+plt.plot(testPredictdf, color='red', label='Forecast')
+plt.title('Test data: sales vs Year')
+plt.xlabel('Year')
+plt.ylabel('Precipitation')
+plt.legend(loc='best')
+
