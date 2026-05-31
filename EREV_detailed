@@ -1,0 +1,903 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from statsmodels.tsa.seasonal import seasonal_decompose
+from statsmodels.tsa.stattools import adfuller, kpss, ccf, grangercausalitytests
+from statsmodels.graphics.tsaplots import plot_acf, plot_pacf
+from sklearn.preprocessing import MinMaxScaler, StandardScaler
+from sklearn.metrics import mean_squared_error, mean_absolute_error
+from math import sqrt
+import pmdarima as pm
+import warnings
+
+warnings.filterwarnings("ignore", category=UserWarning, module="statsmodels")
+warnings.filterwarnings("ignore", category=UserWarning, module="pmdarima")
+warnings.filterwarnings("ignore", category=FutureWarning)
+
+# TARGET_VAR = "B_Car"
+# EXOG_VARS = [
+#     "Saar Industry", "Saar B_Car", "B CAR_PA", "GDP", "GAS_PRICE",
+#     "B_Car_PR", "CPI", "DIESEL", "B CAR_NE", "B CAR_AN",
+#     "B CAR_TH", "B CAR_MD", "B CAR_MN"
+# ]
+
+
+start_date_available = pd.to_datetime("2015-01-01")
+end_date_available = pd.to_datetime("2025-08-01")
+start_date_forecast = pd.to_datetime("2025-09-01")
+end_date_forecast = pd.to_datetime("2035-12-01")
+
+date_range_available = pd.date_range(start=start_date_available, end=end_date_available, freq='MS')
+date_range_forecast = pd.date_range(start=start_date_forecast, end=end_date_forecast, freq='MS')
+full_date_range = pd.date_range(start=start_date_available, end=end_date_forecast, freq='MS')
+
+n_available = len(date_range_available)
+n_forecast = len(date_range_forecast)
+n_full = len(full_date_range)
+
+print(f"Available data points: {n_available} months ({start_date_available.strftime('%Y-%m')} to {end_date_available.strftime('%Y-%m')})")
+print(f"Forecast data points: {n_forecast} months ({start_date_forecast.strftime('%Y-%m')} to {end_date_forecast.strftime('%Y-%m')})")
+
+df_full = pd.read_excel(r"C:\Users\TVELLACK\OneDrive - azureford\Desktop\US_25.2_Model_Input.xlsx",sheet_name='Sheet1')
+df_full['Month'] = pd.to_datetime(df_full['Month'], format='%Y%m')
+df_full = df_full.set_index('Month').sort_index()
+
+df_available = df_full.loc[start_date_available:end_date_available].copy()
+df_forecast_exog = df_full.loc[start_date_forecast:end_date_forecast].copy()
+
+# df_forecast_exog[TARGET_VAR] = np.nan
+
+print(df_available.head())
+
+***modelling function ARIMA
+import pandas as pd
+import numpy as np
+import pmdarima as pm
+import matplotlib.pyplot as plt
+from sklearn.metrics import mean_squared_error, mean_absolute_error
+from math import sqrt
+from statsmodels.tsa.stattools import grangercausalitytests
+from statsmodels.tsa.arima.model import ARIMA
+
+
+import warnings
+
+warnings.filterwarnings("ignore", category=UserWarning, module="statsmodels")
+warnings.filterwarnings("ignore", category=UserWarning, module="pmdarima")
+warnings.filterwarnings("ignore", category=FutureWarning)
+
+def calculate_mape(y_true, y_pred):
+    y_true, y_pred = np.array(y_true), np.array(y_pred)
+    non_zero_mask = y_true != 0
+    
+    if not np.any(non_zero_mask):
+        return np.nan 
+    
+    y_true_filtered = y_true[non_zero_mask]
+    y_pred_filtered = y_pred[non_zero_mask]
+    
+    return np.mean(np.abs((y_true_filtered - y_pred_filtered) / y_true_filtered)) * 100
+
+def cap_outliers_iqr(df: pd.DataFrame, columns: list, multiplier: float = 1.5) -> pd.DataFrame:
+    """
+    Detect and cap outliers using IQR method.
+    """
+    df_capped = df.copy()
+    outlier_info = {}
+    
+    for col in columns:
+        if col not in df_capped.columns:
+            continue
+            
+        Q1 = df_capped[col].quantile(0.25)
+        Q3 = df_capped[col].quantile(0.75)
+        IQR = Q3 - Q1
+        
+        lower_bound = Q1 - multiplier * IQR
+        upper_bound = Q3 + multiplier * IQR
+        
+        original_values = []
+        capped_values = []
+        outlier_dates = []
+        
+        outlier_mask = (df_capped[col] < lower_bound) | (df_capped[col] > upper_bound)
+        
+        if outlier_mask.any():
+            outlier_indices = df_capped[outlier_mask].index
+            for idx in outlier_indices:
+                original_values.append(df_capped.loc[idx, col])
+                outlier_dates.append(idx)
+            
+            df_capped[col] = df_capped[col].clip(lower=lower_bound, upper=upper_bound)
+            
+            for idx in outlier_indices:
+                capped_values.append(df_capped.loc[idx, col])
+            
+            outlier_info[col] = {
+                'lower_bound': lower_bound,
+                'upper_bound': upper_bound,
+                'n_outliers': outlier_mask.sum(),
+                'outlier_dates': outlier_dates,
+                'original_values': original_values,
+                'capped_values': capped_values,
+                'value_changes': [f"{orig:.4f} → {cap:.4f}" for orig, cap in zip(original_values, capped_values)]
+            }
+    
+    if outlier_info:
+        print("\n--- IQR Outlier Capping Summary ---")
+        for col, info in outlier_info.items():
+            print(f"  {col}:")
+            print(f"    Bounds: [{info['lower_bound']:.4f}, {info['upper_bound']:.4f}]")
+            print(f"    Detected & Capped: {info['n_outliers']} outliers")
+            
+            if len(info['outlier_dates']) <= 3:
+                print(f"    Outlier dates: {[str(d)[:10] for d in info['outlier_dates']]}")
+                print(f"    Value changes:")
+                for date, change in zip(info['outlier_dates'], info['value_changes']):
+                    print(f"      {str(date)[:10]}: {change}")
+            else:
+                print(f"    Outlier dates (first 3): {[str(d)[:10] for d in info['outlier_dates'][:3]]}")
+                print(f"    Value changes (first 3):")
+                for date, change in zip(info['outlier_dates'][:3], info['value_changes'][:3]):
+                    print(f"      {str(date)[:10]}: {change}")
+    
+    return df_capped
+
+def forecast_with_granger_auto_arima(
+    df_full: pd.DataFrame,
+    target_var: str,
+    original_exog_vars: list,
+    initial_train_end_date_str: str,
+    initial_test_end_date_str: str,
+    final_train_end_date_str: str,
+    final_forecast_end_date_str: str,
+    max_lags_granger: int = 12,
+    significance_level: float = 0.05,
+    seasonal: bool = True,
+    m: int = 12,
+    auto_arima_params: dict = None,
+    cap_outliers: bool = True,
+    outlier_iqr_multiplier: float = 1.5
+) -> dict:
+
+    print(f"--- Starting Automated SARIMAX Forecasting Process ---")
+    print(f"Target Variable: {target_var}")
+    print(f"Original Exogenous Variables: {original_exog_vars}")
+    print(f"Initial Train End Date: {initial_train_end_date_str}")
+    print(f"Initial Test End Date: {initial_test_end_date_str}")
+    print(f"Final Train End Date: {final_train_end_date_str}")
+    print(f"Final Forecast End Date: {final_forecast_end_date_str}")
+    print(f"Max Lags for Granger: {max_lags_granger}")
+    print(f"Granger Significance Level: {significance_level}")
+    print(f"Cap Outliers: {cap_outliers}")
+    if cap_outliers:
+        print(f"IQR Multiplier: {outlier_iqr_multiplier}")
+    print("-" * 50)
+
+    initial_train_end_date = pd.to_datetime(initial_train_end_date_str)
+    initial_test_end_date = pd.to_datetime(initial_test_end_date_str)
+    initial_test_start_date = initial_train_end_date + pd.DateOffset(months=1)
+    
+    final_train_end_date = pd.to_datetime(final_train_end_date_str)
+    final_forecast_end_date = pd.to_datetime(final_forecast_end_date_str)
+    final_forecast_start_date = final_train_end_date + pd.DateOffset(months=1) 
+
+    all_dropped_indices = pd.Index([])
+    
+    df_full_original = df_full.copy()
+
+    if cap_outliers:
+        print("\n0. Detecting and capping outliers using IQR method...")
+        cols_to_cap = [target_var] + [var for var in original_exog_vars if var in df_full.columns]
+        df_full = cap_outliers_iqr(df_full, cols_to_cap, outlier_iqr_multiplier)
+
+    print("\n1. Generating lagged exogenous variables for Granger test...")
+    df_lagged_exog_for_granger = df_full[original_exog_vars].copy()
+
+    for exog_col in original_exog_vars:
+        for lag in range(1, max_lags_granger + 1):
+            new_col_name = f"{exog_col}_lag_{lag}"
+            df_lagged_exog_for_granger[new_col_name] = df_lagged_exog_for_granger[exog_col].shift(lag)
+
+    df_combined_for_granger = pd.concat([df_full[[target_var]], df_lagged_exog_for_granger], axis=1)
+
+    initial_granger_indices = df_combined_for_granger.index
+    df_granger_test_data = df_combined_for_granger.dropna()
+    dropped_for_granger = initial_granger_indices.difference(df_granger_test_data.index)
+    all_dropped_indices = all_dropped_indices.union(dropped_for_granger)
+
+    if not dropped_for_granger.empty:
+        print(f"  Dropped {len(dropped_for_granger)} rows for Granger test due to NaNs from lagging.")
+
+    if df_granger_test_data.empty:
+        raise ValueError("Not enough data after creating lags and dropping NaNs for Granger causality tests.")
+
+    print("\n2. Performing Granger Causality tests for feature selection...")
+    selected_exog_features = []
+    granger_results_summary = {}
+
+    for original_exog_col in original_exog_vars:
+        best_lag_for_this_exog = None
+        min_p_value_for_this_exog = significance_level
+
+        print(f"  Testing lags for original variable: '{original_exog_col}'")
+        
+        lags_to_test = [f"{original_exog_col}_lag_{lag}" for lag in range(1, max_lags_granger + 1)]
+
+        for potential_exog_feature in lags_to_test:
+            if potential_exog_feature not in df_granger_test_data.columns:
+                continue
+
+            temp_df_for_granger = df_granger_test_data[[target_var, potential_exog_feature]].copy()
+            temp_df_for_granger = temp_df_for_granger.diff(1).dropna() 
+
+            if len(temp_df_for_granger) < 2 * max_lags_granger + 2: 
+                continue
+
+            try:
+                test_results = grangercausalitytests(temp_df_for_granger[[target_var, potential_exog_feature]],
+                                                     maxlag=max_lags_granger, verbose=False)
+                
+                p_value = test_results[max_lags_granger][0]['ssr_ftest'][1] 
+                granger_results_summary[potential_exog_feature] = p_value
+
+                if p_value < min_p_value_for_this_exog:
+                    min_p_value_for_this_exog = p_value
+                    best_lag_for_this_exog = potential_exog_feature
+
+            except Exception as e:
+                pass
+        
+        if best_lag_for_this_exog:
+            selected_exog_features.append(best_lag_for_this_exog)
+            print(f"  - Selected for '{original_exog_col}': '{best_lag_for_this_exog}' (p-value: {min_p_value_for_this_exog:.4f})")
+        else:
+            print(f"  - No significant lag found for '{original_exog_col}' below significance level {significance_level}.")
+
+    if not selected_exog_features:
+        print("\nNo significant lagged exogenous variables found based on Granger causality.")
+    else:
+        print(f"\nFinal list of selected significant exogenous features: {selected_exog_features}")
+
+    print("\n3. Preparing data for auto_arima (initial model selection and training)...")
+
+    final_exog_df_with_nans = pd.DataFrame(index=df_full.index)
+    if selected_exog_features:
+        for feature in selected_exog_features:
+            parts = feature.split('_lag_')
+            original_name = parts[0]
+            lag_num = int(parts[1]) if len(parts) > 1 else 0
+
+            if lag_num > 0:
+                final_exog_df_with_nans[feature] = df_full[original_name].shift(lag_num)
+            else: 
+                final_exog_df_with_nans[feature] = df_full[feature] 
+
+    initial_model_ready_df_with_nans = pd.concat([df_full[[target_var]], final_exog_df_with_nans], axis=1)
+    
+    df_cleaned_with_nans_for_final_model = initial_model_ready_df_with_nans.copy()
+
+    initial_model_ready_indices = initial_model_ready_df_with_nans.index
+    df_model_ready = initial_model_ready_df_with_nans.dropna()
+    dropped_for_model = initial_model_ready_indices.difference(df_model_ready.index)
+    all_dropped_indices = all_dropped_indices.union(dropped_for_model)
+
+    if not dropped_for_model.empty:
+        print(f"  Dropped {len(dropped_for_model)} rows for initial model training due to NaNs from lagging or missing data.")
+    
+    if df_model_ready.empty:
+        raise ValueError("Not enough data after creating lags and dropping NaNs for initial model training.")
+
+    df_train = df_model_ready.loc[:initial_train_end_date]
+    df_test = df_model_ready.loc[initial_test_start_date:initial_test_end_date]
+
+    forecast_horizon_initial = len(df_test)
+    if forecast_horizon_initial == 0:
+        raise ValueError(f"No data found for the initial test set period.")
+    
+    y_train = df_train[target_var]
+    X_train = df_train[selected_exog_features] if selected_exog_features else None
+
+    y_test = df_test[target_var]
+    X_forecast_test = df_test[selected_exog_features] if selected_exog_features else None
+
+    print(f"  Training data for initial model from {y_train.index.min().strftime('%Y-%m')} to {y_train.index.max().strftime('%Y-%m')}")
+    print(f"  Test data for initial model from {y_test.index.min().strftime('%Y-%m')} to {y_test.index.max().strftime('%Y-%m')}")
+    print(f"  Initial Training set size: {len(y_train)} observations")
+    print(f"  Initial Test set size: {len(y_test)} observations (forecast horizon: {forecast_horizon_initial})")
+
+    print("\n4. Starting auto_arima model selection and training (initial run)...")
+
+    default_auto_arima_params = {
+        'start_p': 1, 'start_q': 1,
+        'max_p': 5, 'max_q': 5,
+        'm': m,
+        'seasonal': seasonal,
+        'd': None, 'D': None,
+        'trace': False, 
+        'error_action': 'ignore',
+        'suppress_warnings': True,
+        'stepwise': True,
+        'random_state': 42,
+        'n_fits': 20 
+    }
+    if auto_arima_params:
+        default_auto_arima_params.update(auto_arima_params)
+
+    initial_model = pm.auto_arima(y=y_train, exog=X_train, **default_auto_arima_params)
+
+    print("\n--- Initial Model - Summary ---")
+    print(initial_model.summary())
+    print("-" * 50)
+
+    best_order = initial_model.order
+    best_seasonal_order = initial_model.seasonal_order
+    print(f"  Initial Model ARIMAX Order: {best_order}")
+    print(f"  Initial Model Seasonal Order: {best_seasonal_order}")
+    in_sample_predictions_Mod1 = pd.Series(initial_model.predict_in_sample(exog=X_train), index=y_train.index)
+
+    print("\n5. Generating forecast for the test set using the initial model...")
+    if X_forecast_test is not None and X_forecast_test.empty:
+        forecast_result_test = initial_model.predict(n_periods=forecast_horizon_initial, return_conf_int=True)
+    else:
+        forecast_result_test = initial_model.predict(n_periods=forecast_horizon_initial, exog=X_forecast_test, return_conf_int=True)
+
+    forecast_series_test = pd.Series(forecast_result_test[0], index=y_test.index)
+    conf_int_lower_test = pd.Series(forecast_result_test[1][:, 0], index=y_test.index)
+    conf_int_upper_test = pd.Series(forecast_result_test[1][:, 1], index=y_test.index)
+
+    print("Test set forecast generated successfully.")
+    
+    print("\n6. Visualizing results and evaluating initial forecast...")
+    plt.figure(figsize=(16, 8))
+    plt.plot(y_train.index, y_train, label='Training Data', color='blue')
+    plt.plot(in_sample_predictions_Mod1.index, in_sample_predictions_Mod1, label=' Train Prediction', color='purple', linestyle='--')
+    plt.plot(y_test.index, y_test, label='Actual Test Data', color='orange')
+    plt.plot(forecast_series_test.index, forecast_series_test, label='Forecast', color='green', linestyle='--')
+    plt.fill_between(forecast_series_test.index, conf_int_lower_test, conf_int_upper_test, color='lightgreen', alpha=0.3, label='Confidence Interval')
+    plt.title(f'{target_var} Forecast with SARIMAX - Initial Model')
+    plt.xlabel('Date')
+    plt.ylabel(target_var)
+    plt.legend()
+    plt.grid(True)
+    plt.show()
+
+    rmse_test = sqrt(mean_squared_error(y_test, forecast_series_test))
+    mae_test = mean_absolute_error(y_test, forecast_series_test)
+    mape_test = calculate_mape(y_test, forecast_series_test)
+    
+    print(f"\n--- Initial Model Test Data Evaluation ---")
+    print(f"RMSE: {rmse_test:.2f}, MAE: {mae_test:.2f}, MAPE: {mape_test:.2f}%" if not np.isnan(mape_test) else f"RMSE: {rmse_test:.2f}, MAE: {mae_test:.2f}")
+
+    y_train_pred = initial_model.predict_in_sample(exog=X_train)
+    rmse_train = sqrt(mean_squared_error(y_train, y_train_pred))
+    mae_train = mean_absolute_error(y_train, y_train_pred)
+    mape_train = calculate_mape(y_train, y_train_pred)
+
+    print(f"--- Initial Model Training Data Evaluation ---")
+    print(f"RMSE: {rmse_train:.2f}, MAE: {mae_train:.2f}, MAPE: {mape_train:.2f}%" if not np.isnan(mape_train) else f"RMSE: {rmse_train:.2f}, MAE: {mae_train:.2f}")
+
+    explanation = {
+        "rmse_test_initial_model": rmse_test,
+        "mae_test_initial_model": mae_test,
+        "mape_test_initial_model": mape_test,
+        "rmse_train_initial_model": rmse_train,
+        "mae_train_initial_model": mae_train,
+        "mape_train_initial_model": mape_train,
+        "selected_exog_features": selected_exog_features,
+        "initial_model_summary": str(initial_model.summary()),
+        "exog_coefficients": {},
+        "arima_order": best_order,
+        "seasonal_order": best_seasonal_order,
+        "aic_initial_model": initial_model.aic(),
+        "bic_initial_model": initial_model.bic(),
+        "dropped_row_indices": all_dropped_indices.tolist(),
+        "df_cleaned_with_nans_for_final_model": df_cleaned_with_nans_for_final_model,
+        "df_full_original": df_full_original,
+        "df_full_cleaned": df_full.copy()
+    }
+
+    print("\n--- Exogenous Variable Coefficients (Weightage) ---")
+    coef_df = pd.DataFrame(initial_model.summary().tables[1].data[1:], columns=initial_model.summary().tables[1].data[0])
+    
+    exog_coefficients_found = False
+    for i, row in coef_df.iterrows():
+        param_name = row['']
+        if param_name.startswith('x') and param_name[1:].isdigit(): 
+            try:
+                original_feature_name = selected_exog_features[int(param_name[1:]) - 1]
+                explanation["exog_coefficients"][original_feature_name] = {
+                    "coefficient": float(row['coef']),
+                    "std_err": float(row['std err']),
+                    "z": float(row['z']),
+                    "p_value": float(row['P>|z|'])
+                }
+                print(f"  - {original_feature_name}: Coefficient = {float(row['coef']):.4f}, "
+                      f"P-value = {float(row['P>|z|']):.4f} {'(Significant)' if float(row['P>|z|']) < 0.05 else '(Not Significant)'}")
+                exog_coefficients_found = True
+            except (IndexError, ValueError):
+                pass 
+
+    if not exog_coefficients_found and selected_exog_features:
+        print("  Could not precisely map exogenous variable coefficients from initial model summary. ")
+        print(f"  Selected exogenous features were: {selected_exog_features}")
+    elif not selected_exog_features:
+        print("  No exogenous variables were selected or included in the initial model.")
+
+    print(f"  The initial model selected is SARIMAX with order {best_order} and seasonal order {best_seasonal_order}.")
+    print(f"\n--- Dropped Rows Information ---")
+    if all_dropped_indices.empty:
+        print("  No rows were dropped during data preparation due to lagging operations.")
+    else:
+        print(f"  A total of {len(all_dropped_indices)} rows were dropped due to NaNs introduced by lagging. "
+              f"The indices of these dropped rows are: {all_dropped_indices.tolist()}")
+
+    # --- Final Model Training with statsmodels ARIMA ---
+    print("\n" + "="*50)
+    print("=== Final Model Training and Forecasting (statsmodels ARIMA) ===")
+    print("="*50)
+
+    df_final_train_raw = df_cleaned_with_nans_for_final_model.loc[:final_train_end_date]
+
+    cols_to_check_for_nan = [target_var]
+    if selected_exog_features:
+        cols_to_check_for_nan.extend(selected_exog_features)
+
+    df_final_train_cleaned = df_final_train_raw.dropna(subset=cols_to_check_for_nan)
+
+    y_full_final_train = df_final_train_cleaned[target_var]
+    X_full_final_train = df_final_train_cleaned[selected_exog_features] if selected_exog_features else None
+
+    if y_full_final_train.empty:
+        raise ValueError(f"No valid training data found for the final model.")
+
+    print(f"  Final training data from {y_full_final_train.index.min().strftime('%Y-%m')} to {y_full_final_train.index.max().strftime('%Y-%m')}")
+    print(f"  Final training set size: {len(y_full_final_train)} observations")
+
+    print(f"\nDeveloping final SARIMAX model with statsmodels ARIMA...")
+    print(f"  Using order {best_order} and seasonal order {best_seasonal_order} from initial model")
+    
+    # Use statsmodels ARIMA with parameters from initial model
+    final_model = ARIMA(
+        endog=y_full_final_train,
+        exog=X_full_final_train,
+        order=best_order,
+        seasonal_order=best_seasonal_order
+    )
+    
+    final_model_fit = final_model.fit()
+
+    print("\n--- Final Model Summary ---")
+    print(final_model_fit.summary())
+    print("-" * 50)
+
+    # --- Exogenous Variable Coefficient Analysis ---
+    print("\n--- Exogenous Variable Standardized Coefficient Analysis ---")
+    
+    if selected_exog_features:
+        fitted_params = final_model_fit.params
+        
+        # Map exogenous variable coefficients
+        exog_coefficients = {}
+        for idx, var in enumerate(selected_exog_features):
+            # statsmodels names exog as x1, x2, etc.
+            param_key = f'x{idx+1}'
+            if param_key in fitted_params.index:
+                exog_coefficients[var] = fitted_params[param_key]
+            elif var in fitted_params.index:
+                exog_coefficients[var] = fitted_params[var]
+        
+        if exog_coefficients:
+            exog_coefficients_series = pd.Series(exog_coefficients)
+            
+            print("\nFitted Coefficients for Exogenous Variables:")
+            print(exog_coefficients_series)
+            
+            # Calculate standard deviations of exogenous variables from training data
+            exog_std_devs = df_final_train_cleaned[selected_exog_features].std()
+            
+            print("\nStandard Deviations of Exogenous Variables (from training data):")
+            print(exog_std_devs)
+            
+            # Calculate the "Standardized Impact" (Coefficient * Std Dev)
+            standardized_impacts = exog_coefficients_series * exog_std_devs
+            
+            print("\nStandardized Impacts (Coefficient * Std Dev):")
+            print(standardized_impacts.sort_values(ascending=False, key=abs))
+            
+            print("\nInterpretation:")
+            for var, impact in standardized_impacts.sort_values(ascending=False, key=abs).items():
+                print(f"- A one-standard-deviation increase in '{var}' is associated with an estimated change of approximately {impact:.4f} units in '{target_var}'.")
+                if impact > 0:
+                    print(f"  This indicates a positive relationship: as '{var}' typically increases, '{target_var}' tends to increase.")
+                elif impact < 0:
+                    print(f"  This indicates a negative relationship: as '{var}' typically increases, '{target_var}' tends to decrease.")
+        else:
+            print("Could not extract exogenous variable coefficients from the model.")
+    else:
+        print("No exogenous variables were selected for the model.")
+
+    # Forecast using the final model
+    print(f"\n3. Generating future forecast from {final_forecast_start_date.strftime('%Y-%m')} to {final_forecast_end_date.strftime('%Y-%m')}...")
+
+    current_date = final_forecast_start_date
+    future_dates = []
+    while current_date <= final_forecast_end_date:
+        future_dates.append(current_date)
+        current_date += pd.DateOffset(months=1)
+    
+    n_periods_final_forecast = len(future_dates)
+    future_dates_series = pd.to_datetime(future_dates)
+
+    X_forecast_future = None
+    
+    if selected_exog_features:
+        # Prepare future exogenous data by extracting from df_cleaned_with_nans_for_final_model
+        X_forecast_future_potential = df_cleaned_with_nans_for_final_model.loc[future_dates_series, selected_exog_features]
+        
+        if X_forecast_future_potential.empty:
+            print("  Warning: No exogenous variable data found for the future forecast period.")
+            print("  The model will forecast without exogenous variables, which may reduce accuracy.")
+            X_forecast_future = None
+        elif X_forecast_future_potential.isnull().values.any():
+            print("  Warning: Future exogenous variables contain NaN values.")
+            print(f"  NaN count per variable: {X_forecast_future_potential.isnull().sum().to_dict()}")
+            print("  The model will forecast without exogenous variables, which may reduce accuracy.")
+            X_forecast_future = None
+        else:
+            X_forecast_future = X_forecast_future_potential
+            print("  Future exogenous variables found and will be used in the forecast.")
+
+    # Generate forecast using statsmodels ARIMA
+    if X_forecast_future is not None:
+        final_forecast_result = final_model_fit.forecast(steps=n_periods_final_forecast, exog=X_forecast_future)
+        forecast_result_with_ci = final_model_fit.get_forecast(steps=n_periods_final_forecast, exog=X_forecast_future)
+    else:
+        final_forecast_result = final_model_fit.forecast(steps=n_periods_final_forecast)
+        forecast_result_with_ci = final_model_fit.get_forecast(steps=n_periods_final_forecast)
+    
+    forecast_ci = forecast_result_with_ci.conf_int()
+    
+    final_forecast_series = pd.Series(final_forecast_result, index=future_dates_series)
+    final_conf_int_lower = pd.Series(forecast_ci.iloc[:, 0].values, index=future_dates_series)
+    final_conf_int_upper = pd.Series(forecast_ci.iloc[:, 1].values, index=future_dates_series)
+
+    print("Future forecast generated successfully.")
+
+    in_sample_predictions = pd.Series(final_model_fit.fittedvalues, index=y_full_final_train.index)
+
+    mape_train_final = calculate_mape(y_full_final_train, in_sample_predictions)
+
+    print("\n8. Visualizing final future forecast...")
+    plt.figure(figsize=(16, 8))
+    plt.plot(y_full_final_train.index, y_full_final_train, label='Training Data', color='blue')
+    plt.plot(in_sample_predictions.index, in_sample_predictions, label='Train Prediction', color='purple', linestyle='--')
+    plt.plot(final_forecast_series.index, final_forecast_series, label='Future Forecast', color='red', linestyle='--')
+    plt.fill_between(final_forecast_series.index, final_conf_int_lower, final_conf_int_upper, color='lightcoral', alpha=0.3, label='Confidence Interval')
+    plt.title(f'{target_var} Forecast with Final SARIMAX Model (statsmodels)')
+    plt.xlabel('Date')
+    plt.ylabel(target_var)
+    plt.legend()
+    plt.grid(True)
+    plt.show()
+
+    explanation["final_model_summary"] = str(final_model_fit.summary())
+    explanation["final_forecast_series"] = final_forecast_series
+    explanation["final_conf_int_lower"] = final_conf_int_lower
+    explanation["final_conf_int_upper"] = final_conf_int_upper
+    explanation["in_sample_predictions"] = in_sample_predictions
+    explanation["aic_final_model"] = final_model_fit.aic
+    explanation["bic_final_model"] = final_model_fit.bic
+    explanation["mape_train_final"] = mape_train_final 
+    explanation["standardized_impacts"] = standardized_impacts if selected_exog_features else None
+
+    return explanation
+
+***Vizualization
+def visualize_outlier_transformations(df_original: pd.DataFrame, df_cleaned: pd.DataFrame, columns: list):
+    """Visualize outlier transformations for specified columns."""
+    import matplotlib.pyplot as plt
+    
+    columns_with_changes = [col for col in columns if col in df_original.columns and col in df_cleaned.columns 
+                           and not df_original[col].equals(df_cleaned[col])]
+    
+    if not columns_with_changes:
+        print("No outliers were detected or capped in the specified columns.")
+        return
+    
+    n_cols = len(columns_with_changes)
+    fig, axes = plt.subplots(n_cols, 2, figsize=(18, 5*n_cols))
+    
+    if n_cols == 1:
+        axes = axes.reshape(1, -1)
+    
+    for idx, col in enumerate(columns_with_changes):
+        series_orig = df_original[col].dropna()
+        series_clean = df_cleaned[col].dropna()
+        changed_indices = series_orig.index[series_orig != series_clean]
+        
+        ax1 = axes[idx, 0]
+        ax1.plot(series_orig.index, series_orig, 'o-', color='blue', alpha=0.6, label='Original', markersize=3)
+        if len(changed_indices) > 0:
+            ax1.scatter(changed_indices, series_orig.loc[changed_indices], 
+                       color='red', s=100, marker='x', linewidths=3, label=f'Outliers ({len(changed_indices)})', zorder=5)
+        ax1.set_title(f'{col} - Original Data')
+        ax1.set_xlabel('Date')
+        ax1.set_ylabel('Value')
+        ax1.legend()
+        ax1.grid(True, alpha=0.3)
+        
+        ax2 = axes[idx, 1]
+        ax2.plot(series_clean.index, series_clean, 'o-', color='green', alpha=0.6, label='Cleaned', markersize=3)
+        if len(changed_indices) > 0:
+            ax2.scatter(changed_indices, series_clean.loc[changed_indices], 
+                       color='orange', s=100, marker='o', label=f'Capped ({len(changed_indices)})', zorder=5)
+            
+            for change_idx in changed_indices[:5]:
+                orig_val = series_orig.loc[change_idx]
+                clean_val = series_clean.loc[change_idx]
+                ax2.annotate(f'{orig_val:.2f}→{clean_val:.2f}', xy=(change_idx, clean_val), xytext=(10, 10), 
+                           textcoords='offset points', fontsize=8, color='red',
+                           bbox=dict(boxstyle='round,pad=0.3', facecolor='yellow', alpha=0.7),
+                           arrowprops=dict(arrowstyle='->', color='red', lw=1))
+        
+        ax2.set_title(f'{col} - After IQR Capping')
+        ax2.set_xlabel('Date')
+        ax2.set_ylabel('Value')
+        ax2.legend()
+        ax2.grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    plt.show()
+    
+    print("\n=== Outlier Transformation Summary ===")
+    for col in columns_with_changes:
+        series_orig = df_original[col].dropna()
+        series_clean = df_cleaned[col].dropna()
+        changed_indices = series_orig.index[series_orig != series_clean]
+        
+        print(f"\n{col}: {len(changed_indices)} outliers capped")
+        for change_idx in changed_indices:
+            orig_val = series_orig.loc[change_idx]
+            clean_val = series_clean.loc[change_idx]
+            change_pct = ((clean_val - orig_val) / orig_val) * 100 if orig_val != 0 else 0
+            print(f"  {str(change_idx)[:10]}: {orig_val:.4f} → {clean_val:.4f} ({change_pct:+.2f}%)")
+
+***Small utility
+TARGET_VAR = "Small_Utility"
+EXOG_VARS = [  "Saar Industry", "Saar Small_Utility","GDP", "GAS_PRICE",
+    "Small_Utility_PR", "CPI", "DIESEL", "SMALL UTILITY_NE", "SMALL UTILITY_AN",
+    "SMALL UTILITY_TH", "SMALL UTILITY_MD", "SMALL UTILITY_MN","SMALL UTILITY_PA"
+]
+
+df_forecast_exog[TARGET_VAR] = np.nan
+
+INITIAL_TRAIN_END = '2024-08-01'
+INITIAL_TEST_END = '2025-08-01'
+FINAL_TRAIN_END = '2025-08-01'
+FINAL_FORECAST_END = '2035-12-01'
+
+results = forecast_with_granger_auto_arima(
+    df_full=df_full,
+    target_var=TARGET_VAR,
+    original_exog_vars=EXOG_VARS,
+    initial_train_end_date_str=INITIAL_TRAIN_END,
+    initial_test_end_date_str=INITIAL_TEST_END,
+    final_train_end_date_str=FINAL_TRAIN_END,
+    final_forecast_end_date_str=FINAL_FORECAST_END,
+    max_lags_granger=12,
+    significance_level=0.05,
+    seasonal=True,
+    m=12,
+    cap_outliers=True,
+    outlier_iqr_multiplier=1.5,
+    auto_arima_params={'trace': True,
+    'seasonal': True,
+    'stationary': False,
+    'information_criterion': 'aic',
+    'alpha': 0.05}
+)
+
+print("\n" + "="*60)
+print("=== OUTLIER TRANSFORMATION VISUALIZATION ===")
+print("="*60)
+visualize_outlier_transformations(
+    df_original=results['df_full_original'],
+    df_cleaned=results['df_full_cleaned'],
+    columns=[TARGET_VAR, 'GDP', 'CPI'],
+)
+
+
+print("\n--- Final Results Summary (Initial Model) ---")
+print(f"RMSE on initial test data: {results['rmse_test_initial_model']:.2f}")
+print(f"MAE on initial test data: {results['mae_test_initial_model']:.2f}")
+if not np.isnan(results['mape_test_initial_model']):
+    print(f"MAPE on initial test data: {results['mape_test_initial_model']:.2f}%")
+else:
+    print(f"MAPE on initial test data: NA")
+print(f"RMSE on initial training data: {results['rmse_train_initial_model']:.2f}")
+print(f"MAE on initial training data: {results['mae_train_initial_model']:.2f}")
+if not np.isnan(results['mape_train_initial_model']):
+    print(f"MAPE on initial training data: {results['mape_train_initial_model']:.2f}%")
+else:
+    print(f"MAPE on initial training data: NA")
+print(f"Selected exogenous features: {results['selected_exog_features']}")
+print(f"ARIMA Order: {results['arima_order']}")
+print(f"Seasonal Order: {results['seasonal_order']}")
+print(f"Dropped Row Indices: {results['dropped_row_indices']}")
+
+print("\n--- Final Model Forecast Details ---")
+print(f"Final Model AIC: {results['aic_final_model']:.2f}")
+print(f"Final Model BIC: {results['bic_final_model']:.2f}")
+print(f"Final Model Mape: {results['mape_train_final']:.2f}")
+
+
+final_train_end_date = pd.to_datetime(FINAL_TRAIN_END)
+final_forecast_end_date = pd.to_datetime(FINAL_FORECAST_END)
+final_forecast_start_date = final_train_end_date + pd.DateOffset(months=1)
+target_var = TARGET_VAR
+selected_exog_features = results['selected_exog_features']
+df_cleaned_with_nans_for_final_model = results['df_cleaned_with_nans_for_final_model']
+
+full_output_date_range = pd.date_range(start=df_cleaned_with_nans_for_final_model.index.min(), 
+                                       end=final_forecast_end_date, 
+                                       freq='MS')
+
+
+output_df = pd.DataFrame(index=full_output_date_range)
+output_df[f'Actual_{target_var}'] = df_cleaned_with_nans_for_final_model.loc[:final_train_end_date, target_var]
+output_df['In_Sample_Prediction'] = results['in_sample_predictions']
+output_df['Future_Forecast'] = results['final_forecast_series']
+output_df['Future_Lower_CI'] = results['final_conf_int_lower']
+output_df['Future_Upper_CI'] = results['final_conf_int_upper']
+
+if selected_exog_features:
+    for col in selected_exog_features:
+        output_df[col] = df_cleaned_with_nans_for_final_model.loc[:, col].reindex(full_output_date_range)
+
+output_df[f'Actual_{target_var}_Exp'] = np.exp(output_df[f'Actual_{target_var}'])
+output_df['In_Sample_Prediction_Exp'] = np.exp(output_df['In_Sample_Prediction'])
+output_df['Future_Forecast_Exp'] = np.exp(output_df['Future_Forecast'])
+output_df['Future_Lower_CI_Exp'] = np.exp(output_df['Future_Lower_CI'])
+output_df['Future_Upper_CI_Exp'] = np.exp(output_df['Future_Upper_CI'])
+
+output_df = output_df.reset_index().rename(columns={'index': 'Date'})
+excel_filename = f"Draft2/{TARGET_VAR}_25.2_Forecast_Data_draft2.xlsx"
+output_df.to_excel(excel_filename, index=False)
+
+print("\n" + "="*40)
+print("=== Plotting Forecast vs Actual ===")
+print("="*40)
+
+plt.figure(figsize=(18, 9))
+
+plt.plot(output_df['Date'], output_df[f'Actual_{TARGET_VAR}_Exp'], label=f'Actual {TARGET_VAR}', color='darkblue', linewidth=2)
+plt.plot(output_df['Date'], output_df['In_Sample_Prediction_Exp'], label='Train data prediction', color='darkmagenta', linestyle=':', linewidth=1.5)
+plt.plot(output_df['Date'], output_df['Future_Forecast_Exp'], label='Future Forecast', color='darkred', linestyle='--', linewidth=2)
+plt.fill_between(output_df['Date'], output_df['Future_Lower_CI_Exp'], output_df['Future_Upper_CI_Exp'], color='salmon', alpha=0.3, label='95% Confidence Interval')
+
+plt.title(f'{TARGET_VAR} Forecast')
+plt.xlabel('Date')
+plt.ylabel(f'{TARGET_VAR}')
+plt.legend()
+plt.grid(True)
+plt.show()
+
+output_df.set_index('Date', inplace=True)
+output_df['Future_Forecast_Exp'].resample('Y').sum()/1000
+
+**Ex mini utility
+
+
+TARGET_VAR = "Mini_utility"
+EXOG_VARS = [
+    "Saar Industry", "Saar Mini_utility", "MINI UTILITY_PA", "GDP", "GAS_PRICE",
+    "Mini_utility_PR", "CPI", "DIESEL", "MINI UTILITY_NE", "MINI UTILITY_AN",
+    "MINI UTILITY_TH", "MINI UTILITY_MD", "MINI UTILITY_MN"
+]
+
+df_forecast_exog[TARGET_VAR] = np.nan
+
+INITIAL_TRAIN_END = '2024-08-01'
+INITIAL_TEST_END = '2025-08-01'
+FINAL_TRAIN_END = '2025-08-01'
+FINAL_FORECAST_END = '2035-12-01'
+
+
+results = forecast_with_granger_auto_arima(
+    df_full=df_full,
+    target_var=TARGET_VAR,
+    original_exog_vars=EXOG_VARS,
+    initial_train_end_date_str=INITIAL_TRAIN_END,
+    initial_test_end_date_str=INITIAL_TEST_END,
+    final_train_end_date_str=FINAL_TRAIN_END,
+    final_forecast_end_date_str=FINAL_FORECAST_END,
+    max_lags_granger=12,
+    significance_level=0.05,
+    seasonal=True,
+    m=12,
+    cap_outliers=True,
+    outlier_iqr_multiplier=1.5,
+    auto_arima_params={'trace': True,
+    'seasonal': True,
+    'stationary': False}
+)
+
+# print("\n--- Final Results Summary (Initial Model) ---")
+# print(f"RMSE on initial test data: {results['rmse_test_initial_model']:.2f}")
+# print(f"MAE on initial test data: {results['mae_test_initial_model']:.2f}")
+# if not np.isnan(results['mape_test_initial_model']):
+#     print(f"MAPE on initial test data: {results['mape_test_initial_model']:.2f}%")
+# else:
+#     print(f"MAPE on initial test data: NA")
+# print(f"RMSE on initial training data: {results['rmse_train_initial_model']:.2f}")
+# print(f"MAE on initial training data: {results['mae_train_initial_model']:.2f}")
+# if not np.isnan(results['mape_train_initial_model']):
+#     print(f"MAPE on initial training data: {results['mape_train_initial_model']:.2f}%")
+# else:
+#     print(f"MAPE on initial training data: NA")
+# print(f"Selected exogenous features: {results['selected_exog_features']}")
+# print(f"ARIMA Order: {results['arima_order']}")
+# print(f"Seasonal Order: {results['seasonal_order']}")
+# print(f"Dropped Row Indices: {results['dropped_row_indices']}")
+
+print("\n--- Final Model Forecast Details ---")
+print(f"Final Model AIC: {results['aic_final_model']:.2f}")
+print(f"Final Model BIC: {results['bic_final_model']:.2f}")
+print(f"Final Model Mape: {results['mape_train_final']:.2f}")
+
+
+final_train_end_date = pd.to_datetime(FINAL_TRAIN_END)
+final_forecast_end_date = pd.to_datetime(FINAL_FORECAST_END)
+final_forecast_start_date = final_train_end_date + pd.DateOffset(months=1)
+target_var = TARGET_VAR
+selected_exog_features = results['selected_exog_features']
+df_cleaned_with_nans_for_final_model = results['df_cleaned_with_nans_for_final_model']
+
+full_output_date_range = pd.date_range(start=df_cleaned_with_nans_for_final_model.index.min(), 
+                                       end=final_forecast_end_date, 
+                                       freq='MS')
+
+
+output_df = pd.DataFrame(index=full_output_date_range)
+output_df[f'Actual_{target_var}'] = df_cleaned_with_nans_for_final_model.loc[:final_train_end_date, target_var]
+output_df['In_Sample_Prediction'] = results['in_sample_predictions']
+output_df['Future_Forecast'] = results['final_forecast_series']
+output_df['Future_Lower_CI'] = results['final_conf_int_lower']
+output_df['Future_Upper_CI'] = results['final_conf_int_upper']
+
+if selected_exog_features:
+    for col in selected_exog_features:
+        output_df[col] = df_cleaned_with_nans_for_final_model.loc[:, col].reindex(full_output_date_range)
+
+output_df[f'Actual_{target_var}_Exp'] = np.exp(output_df[f'Actual_{target_var}'])
+output_df['In_Sample_Prediction_Exp'] = np.exp(output_df['In_Sample_Prediction'])
+output_df['Future_Forecast_Exp'] = np.exp(output_df['Future_Forecast'])
+output_df['Future_Lower_CI_Exp'] = np.exp(output_df['Future_Lower_CI'])
+output_df['Future_Upper_CI_Exp'] = np.exp(output_df['Future_Upper_CI'])
+
+output_df = output_df.reset_index().rename(columns={'index': 'Date'})
+excel_filename = f"Draft2/{TARGET_VAR}_25.2_Forecast_Data_draft2.xlsx"
+output_df.to_excel(excel_filename, index=False)
+
+print("\n" + "="*40)
+print("=== Plotting Forecast vs Actual ===")
+print("="*40)
+
+plt.figure(figsize=(18, 9))
+
+plt.plot(output_df['Date'], output_df[f'Actual_{TARGET_VAR}_Exp'], label=f'Actual {TARGET_VAR}', color='darkblue', linewidth=2)
+plt.plot(output_df['Date'], output_df['In_Sample_Prediction_Exp'], label='Train data prediction', color='darkmagenta', linestyle=':', linewidth=1.5)
+plt.plot(output_df['Date'], output_df['Future_Forecast_Exp'], label='Future Forecast', color='darkred', linestyle='--', linewidth=2)
+plt.fill_between(output_df['Date'], output_df['Future_Lower_CI_Exp'], output_df['Future_Upper_CI_Exp'], color='salmon', alpha=0.3, label='95% Confidence Interval')
+
+plt.title(f'{TARGET_VAR} Forecast')
+plt.xlabel('Date')
+plt.ylabel(f'{TARGET_VAR}')
+plt.legend()
+plt.grid(True)
+plt.show()
+
+output_df.set_index('Date', inplace=True)
+output_df['Future_Forecast_Exp'].resample('Y').sum()/1000
