@@ -1,0 +1,88 @@
+#fuel prize
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.preprocessing import StandardScaler
+from sklearn.cluster import KMeans
+from sklearn.metrics import silhouette_score
+from sklearn.decomposition import PCA
+
+# Load Excel data
+file_path = r"C:\Users\cmandar\Desktop\China fuel price study.xlsx"
+sheet_name = "Sheet1"
+
+df = pd.read_excel(file_path, sheet_name=sheet_name)
+
+#df = df[df['2025_Result_2'].isin(['Afforadable', 'Premium'])]
+
+df.info()
+
+corr_matrix = df.corr(method='pearson')
+sns.heatmap(corr_matrix, annot=True, cmap='coolwarm')
+plt.title("Correlation Matrix")
+plt.show()
+
+#1. Linear Regression (Absolute Sensitivity)
+
+import pandas as pd
+import statsmodels.api as sm
+# Define X (independent) and y (dependent)
+X = sm.add_constant(df['Octane: 95']) # Adds an intercept
+y1 = df['Non-NEV_Price 200-350k']
+y2 = df['Prem Non NEV']
+
+model_1 = sm.OLS(y1, X).fit()
+#print(model_1.summary())
+
+model_2 = sm.OLS(y2, X).fit()
+print(model_2.summary())
+
+# Interpretation:
+# The coefficient for 'Fuel_Price' is your sensitivity.
+# If coef = -150, then every $1 increase in fuel results in 150 fewer sales.
+
+#2. Log-Log Regression (Elasticity / % Sensitivity)
+
+import numpy as np
+
+# Apply log transformation
+df['log_prem-non-NEV'] = np.log(df['Prem Non NEV'])
+df['log_prem-non-NEV_200-350k'] = np.log(df['Non-NEV_Price 200-350k'])
+df['log_fuel'] = np.log(df['Octane: 95'])
+
+X_log = sm.add_constant(df['log_fuel'])
+y_log_1 = df['log_prem-non-NEV_200-350k']
+y_log_2 = df['log_prem-non-NEV']
+
+log_model_1 = sm.OLS(y_log_1, X_log).fit()
+elasticity_1 = log_model_1.params['log_fuel']
+
+log_model_2 = sm.OLS(y_log_2, X_log).fit()
+elasticity_2= log_model_2.params['log_fuel']
+
+print(f"Fuel Price Elasticity: {elasticity_1:.2f}")
+print(f"Fuel Price Elasticity: {elasticity_2:.2f}")
+
+print(log_model_1.summary())
+
+# 3. Lagged Sensitivity (Time Delay)
+
+# Create a 1-period lag (e.g., last month's fuel price vs this month's sales)
+df['Fuel_Price_Lag1'] = df['Octane: 95'].shift(1)
+
+# Drop the first row (which will now have a NaN)
+df_lagged = df.dropna()
+
+# Run regression using the lagged variable
+X_lag = sm.add_constant(df_lagged['Fuel_Price_Lag1'])
+y_lag_1 = df_lagged['Non-NEV_Price 200-350k']
+y_lag_2 = df_lagged['Prem Non NEV']
+
+lag_model_1 = sm.OLS(y_lag_1, X_lag).fit()
+print(f"Lagged Sensitivity: {lag_model_1.params['Fuel_Price_Lag1']:.2f}")
+lag_model_2 = sm.OLS(y_lag_2, X_lag).fit()
+print(f"Lagged Sensitivity: {lag_model_2.params['Fuel_Price_Lag1']:.2f}")
+print(lag_model_1.summary())
+
+
