@@ -1,0 +1,79 @@
+#Import libraries
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+%matplotlib inline
+import seaborn as sns
+
+#Supress warnings
+import warnings
+warnings.filterwarnings('ignore')
+
+from statsmodels.tsa.stattools import adfuller
+
+from pylab import rcParams
+import statsmodels.api as sm
+
+from statsmodels.tsa.stattools import kpss
+
+from scipy.stats import boxcox
+
+from statsmodels.graphics.tsaplots import plot_acf,plot_pacf
+
+import pmdarima as pm
+from pmdarima import auto_arima
+
+#MAPE and RMSE
+from sklearn.metrics import mean_squared_error
+
+# check prophet version
+from prophet import Prophet
+# print version number
+print('Prophet %s' % prophet.__version__)
+
+# Load dataset
+#%cd C:\Users\cmandar\OneDrive - azureford\China premium\01_Short term forecast\202604_Apr
+file_path = r"C:\Users\cmandar\Desktop\Premium_Apr_2026_v1.0.xlsx"
+sheet_name = "Input_R"
+#dataset = pd.read_excel('Premium_Apr_2026_v1.0.xlsx',sheet_name='Input_R',index_col='Month',parse_dates=True)
+data = pd.read_excel(file_path, sheet_name=sheet_name)
+#data = pd.read_excel('Premium_Apr_2026_v1.0.xlsx',sheet_name='Input_R')
+data['Month'] = pd.to_datetime(data['Month'])
+#data.set_index('Month',inplace=True)
+#data["ds"] = pd.to_datetime(data["Month"])
+#data = data.sort_values("ds")
+#select variables: "INDUSTRY_LN" / BCPR / CDPR / DEPR / FPR/ SPU/ MPU/ LCPU / LTPU
+df = data.loc[:, ["Month", "MPU", "GDP", "MPU_TPI", "DISPOSABLE INCOME", "GASPRICE", "NEWYEAR", "COVID", "Model Y export"]] 
+
+#Dropping Null rows
+df1 = df.dropna()
+
+#renaming variable
+df1 = df1.rename(columns = {'MPU' : 'y','Month' : 'ds' })
+#df1 = df1.rename(columns = {'Month' : 'ds'})
+
+df1.tail(1) 
+
+#Visualization
+df1["y"].plot(figsize = (10, 7), legend = True)
+
+regressors = ["GDP", "MPU_TPI", "DISPOSABLE INCOME", "GASPRICE", "NEWYEAR", "COVID", "Model Y export"] 
+# ----- Train/test split 12 month-----
+val_months = 12
+train_df = df1.iloc[:-val_months].copy()
+val_df = df1.iloc[-val_months:].copy()
+
+# ----- Prophet with external regressors -----
+#from prophet import Prophet
+model = Prophet(
+    yearly_seasonality=True,
+    weekly_seasonality=False,
+    daily_seasonality=False,
+    changepoint_prior_scale=0.05,   # tune
+    seasonality_prior_scale=10.0    # tune
+)
+for col in regressors:
+    # 'standardize' helps stability; Prophet will internally scale regressors
+    model.add_regressor(col, standardize=True)
+model.fit(train_df)
+
