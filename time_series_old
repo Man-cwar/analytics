@@ -1,0 +1,215 @@
+
+import streamlit as st
+import pandas as pd
+from sklearn.feature_selection import mutual_info_regression
+import pmdarima as pm
+from statsmodels.tsa.seasonal import seasonal_decompose
+import matplotlib.pyplot as plt
+from sklearn.metrics import mean_absolute_percentage_error
+from statsmodels.tsa.statespace.sarimax import SARIMAX
+
+# Function to read Excel file
+def read_excel_file(file, sheet_name=None, index_col=None):
+    if sheet_name is None:
+        sheet_name = 0  # If sheet_name is not provided, default to the first sheet
+    df = pd.read_excel(file, sheet_name=sheet_name, index_col=index_col, parse_dates=True)
+    return df
+
+# Function to calculate mutual information
+def calculate_mutual_information(new_df, target_variable):
+    return mutual_info_regression(new_df.drop(columns=[target_variable]), new_df[target_variable])
+
+# Function to perform time series modeling
+def time_series_modeling(y, exog_vars, with_intercept=True, seasonal=True, m=1):
+    model_fit = pm.auto_arima(y, X=exog_vars, with_intercept=with_intercept, seasonal=seasonal, m=m, trace=True, error_action="ignore", suppress_warnings=True).fit(y, X=exog_vars)
+    return model_fit
+
+# Function to calculate MAPE
+def calculate_mape(y_true, y_pred):
+    return mean_absolute_percentage_error(y_true, y_pred)
+
+# Function to perform time series modeling (SARIMAX)
+def time_series_modeling_sarimax(y, exog_vars, ar_para, d, ma_para, m, ar_para_s, D, ma_para_s):
+    if m is None:  # No seasonality when m is None
+        model_fit = SARIMAX(y, exog=exog_vars, order=(ar_para, d, ma_para)).fit()
+    else:
+        model_fit = SARIMAX(y, exog=exog_vars, order=(ar_para, d, ma_para), seasonal_order=(ar_para_s, D, ma_para_s, m)).fit()
+    return model_fit
+
+# Streamlit app
+def main():
+    st.title("Advanced Time Series Forecasting App")
+
+    # File upload widget
+    uploaded_file = st.file_uploader("Choose an Excel file", type=["xlsx", "xls"])
+
+    # Check if a file is uploaded
+    if uploaded_file is not None:
+        st.write("File uploaded successfully!")
+
+        # Allow the user to input sheet name and index column
+        sheet_name = st.selectbox("Select sheet name", pd.ExcelFile(uploaded_file).sheet_names, key="sheet_name")
+        index_col = st.selectbox("Select index column (optional)", [''] + list(pd.read_excel(uploaded_file, sheet_name=sheet_name).columns), key="index_col")
+
+        # Read the Excel file with optional sheet name and index column
+        df = read_excel_file(uploaded_file, sheet_name=sheet_name, index_col=index_col if index_col else None)
+
+        # Allow the user to specify the number of rows for splitting
+        split_rows = st.number_input("Enter the number of rows for the first dataset", min_value=1, value=1, step=1)
+
+        # Split the dataset into two parts
+        new_df = df.iloc[:split_rows, :]
+        forecast_df = df.iloc[split_rows:, :]
+
+        # Allow the user to select columns
+        selected_columns = st.multiselect("Select columns for the new DataFrame", new_df.columns)
+
+        # Create a new DataFrame with selected columns
+        if selected_columns:
+            new_df = new_df.loc[:, selected_columns]
+
+            # Allow the user to select the target variable
+            target_variable = st.selectbox("Select the target variable", new_df.columns)
+
+            # Calculate mutual information
+            mi_values = calculate_mutual_information(new_df, target_variable)
+
+            # Create a DataFrame with column names and corresponding mutual information values
+            mi_df = pd.DataFrame({"Column": new_df.drop(columns=[target_variable]).columns, "Mutual Information": mi_values})
+
+            # Display the mutual information values
+            st.write("Mutual Information Values:")
+            st.write(mi_df)
+
+            # Store the initial mutual information values
+            st.session_state.initial_mi_values = mi_df
+
+            # Allow the user to select columns from the mutual information table
+            selected_mi_columns = st.multiselect("Select columns based on Mutual Information for the final DataFrame", mi_df['Column'])
+
+            # Include the target variable in the final DataFrame
+            if target_variable not in selected_mi_columns:
+                selected_mi_columns.append(target_variable)
+
+            # Create a new DataFrame based on selected columns from the mutual information table
+            final_df = new_df.loc[:, selected_mi_columns]
+
+            # Display the final DataFrame
+            st.write("Final DataFrame based on selected columns from Mutual Information:")
+            st.write(final_df)
+
+            # Button to toggle seasonal decomposition plot
+            show_seasonal_plot = st.button("Toggle Seasonal Decomposition Plot On/Off")
+            if show_seasonal_plot:
+                # Seasonal decomposition plot
+                result = seasonal_decompose(final_df[target_variable])
+                st.write("Seasonal Decomposition Plot:")
+                fig, axes = plt.subplots(nrows=4, ncols=1, figsize=(10, 8), sharex=True)
+                result.observed.plot(ax=axes[0], legend=False)
+                axes[0].set_ylabel('Observed')
+                result.trend.plot(ax=axes[1], legend=False)
+                axes[1].set_ylabel('Trend')
+                result.seasonal.plot(ax=axes[2], legend=False)
+                axes[2].set_ylabel('Seasonal')
+                result.resid.plot(ax=axes[3], legend=False)
+                axes[3].set_ylabel('Residual')
+                plt.tight_layout()
+                st.pyplot(fig)
+            else:
+                st.write("Seasonal Decomposition Plot: Click the button to toggle the plot.")
+
+            # Allow the user to select exogenous variables for time series modeling
+            exog_vars = st.multiselect("Select exogenous variables for time series modeling", final_df.columns.difference([target_variable]))
+            selected_model = st.radio("Select a Model", ("Auto-ARIMA", "SARIMAX"))
+            if selected_model == "Auto-ARIMA":
+            # Include the Bass Model code here
+                st.header("Auto-ARIMA")
+                # Optional user input for time series modeling
+                with_intercept = st.checkbox("Include intercept in the model", value=True)
+                seasonal = st.checkbox("Include seasonal component in the model", value=True)
+                if seasonal:
+                    m = st.select_slider("Select seasonal period (m)", options=[1, 4, 12], value=1)
+                else:
+                    m = 1
+                forecast_periods = st.slider("Select the number of periods to forecast", min_value=1, max_value=12, value=1)
+                alpha = st.number_input("Enter alpha value (default is 0.05)", min_value=0.01, max_value=0.99, value=0.05, step=0.01)  
+                # Button to start time series modeling (without forecast)
+                if st.button("Build Time Series Model and forecast"):
+                    st.write("Time Series Modeling Results:")
+
+                    # Model fitting (moved outside the conditional blocks)
+                    model_fit = time_series_modeling(final_df[target_variable], final_df[exog_vars], with_intercept=with_intercept, seasonal=seasonal, m=m)
+
+                    # Display model summary
+                    st.write(model_fit.summary())
+
+                    # Calculate MAPE
+                    y_true = final_df[target_variable].head(len(final_df))  # Excluding last value for validation
+                    y_pred = model_fit.predict_in_sample(X=final_df[exog_vars])
+                    mape = calculate_mape(y_true, y_pred)
+                    st.write(f"Mean Absolute Percentage Error (MAPE): {mape:.2f}%")
+                    forecast, conf_int = model_fit.predict(n_periods=forecast_periods, X=forecast_df[exog_vars].head(forecast_periods), return_conf_int=True, alpha=alpha)
+
+                    # Display the time series forecast in a table
+                    forecast_df = pd.DataFrame({
+                        "Period": range(1, forecast_periods + 1),
+                        "Forecast": forecast,
+                        "Lower Confidence Interval": conf_int[:, 0],
+                        "Upper Confidence Interval": conf_int[:, 1]
+                    })
+
+                    st.write(forecast_df)
+            if selected_model == "SARIMAX":
+                st.header("SARIMAX")
+                # Optional user input for time series modeling
+                seasonal = st.checkbox("Include seasonal component in the model", value=True)
+                ar_para = st.number_input("Enter AR parameter value", value=1)
+                ma_para = st.number_input("Enter MA parameter value", value=1)
+                d = st.number_input("Enter d parameter value", value=1)
+
+                # Ensure seasonal periodicity is greater than 1
+                if seasonal:
+                    m = st.select_slider("Select seasonal period (m)", options=[2, 4, 12], value=2)
+                    ar_para_s = st.number_input("Enter seasonal AR parameter value", value=1)
+                    ma_para_s = st.number_input("Enter seasonal MA parameter value", value=1)
+                    D = st.number_input("Enter D parameter value", value=1)
+                else:
+                    m = None  # No seasonality
+                    ar_para_s = 0
+                    ma_para_s = 0
+                    D = 0
+                forecast_periods_sarimax = st.slider("Select the number of periods to forecast", min_value=1, max_value=12, value=1)
+                alpha_sarimax = st.number_input("Enter alpha value (default is 0.05)", min_value=0.01, max_value=0.99, value=0.05, step=0.01)  
+                # Button to start time series modeling (without forecast)
+                if st.button("Build Time Series Model and forecast"):
+                    st.write("Time Series Modeling Results:")
+
+                    # Model fitting (SARIMAX)
+                    model_fit_sarimax = time_series_modeling_sarimax(final_df[target_variable], final_df[exog_vars], ar_para, d, ma_para, m, ar_para_s, D, ma_para_s)
+
+                    # Display SARIMAX model summary
+                    st.write(model_fit_sarimax.summary())
+
+                    # Calculate MAPE
+                    y_true_sarimax = final_df[target_variable].head(len(final_df))
+                    prediction_sarimax = model_fit_sarimax.get_prediction(X=final_df[exog_vars])
+                    y_pred_sarimax = prediction_sarimax.predicted_mean
+                    mape_sarimax = calculate_mape(y_true_sarimax, y_pred_sarimax)
+                    st.write(f"SARIMAX Mean Absolute Percentage Error (MAPE): {mape_sarimax:.2f}%")
+
+                    predictions_future = model_fit_sarimax.get_forecast(steps=forecast_periods_sarimax, exog=forecast_df[exog_vars].head(forecast_periods_sarimax))
+                    predicted_mean_future = predictions_future.predicted_mean
+                    predicted_ci_future = predictions_future.conf_int(alpha=alpha_sarimax)
+                    # Display the time series forecast in a table
+                    forecast_df_sarimax = pd.DataFrame({
+                        "Period": range(1, forecast_periods_sarimax + 1),
+                        "Forecast": predicted_mean_future,
+                        "Lower Confidence Interval": predicted_ci_future.iloc[:, 0],
+                        "Upper Confidence Interval": predicted_ci_future.iloc[:, 1]
+                    })
+
+                    st.write(forecast_df_sarimax)
+
+# Run the Streamlit app
+if __name__ == "__main__":
+    main()
