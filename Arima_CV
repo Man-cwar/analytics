@@ -1,0 +1,163 @@
+#Import libraries
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+%matplotlib inline
+#SARIMAX/AutoArima
+from statsmodels.tsa.statespace.sarimax import SARIMAX
+from statsmodels.graphics.tsaplots import plot_acf,plot_pacf # for determining (p,q) orders
+from statsmodels.tsa.seasonal import seasonal_decompose      # for ETS Plots
+import pmdarima as pm
+from pmdarima import auto_arima                              # for determining ARIMA orders
+import statsmodels.api as sm
+from statsmodels.tsa.stattools import kpss
+from scipy.stats import boxcox
+
+#MAPE and RMSE
+from sklearn.metrics import mean_squared_error
+from statsmodels.tools.eval_measures import mse,rmse
+
+# Ignore harmless warnings
+import warnings
+warnings.filterwarnings("ignore")
+
+# Load dataset
+%cd C:\Users\cmandar\Desktop\China premium\01_Short term forecast\202311_Nove
+dataset = pd.read_excel('Premium_Nov_2023_v1.0.xlsx',sheet_name='Input_R',index_col='Month',parse_dates=True)
+
+#select variables: "INDUSTRY_LN" / BCPR / CDPR / DEPR / FPR/ SPU/ MPU/ LCPU / LTPU
+df = dataset.loc[:, ["BCPR", "GDP", "CPI", "DISPOSABLE INCOME", "GASPRICE", "NEWYEAR", "COVID", "CHIPCAR"]] 
+
+#Dropping Null rows
+df1 = df.dropna()
+
+df1.tail(1) 
+
+# Data Transformation
+
+# Convert Month into Datetime
+df1.index.freq = 'MS'          #change index freq monthly
+
+#renaming variable
+df1 = df1.rename(columns = {'BCPR' : 'y'})
+
+df1.tail()
+
+#Visualization
+df1["y"].plot(figsize = (10, 7), legend = True)
+
+#ETS Decomposition
+result = seasonal_decompose(df1['y'])
+result.plot();
+
+#Auto ARIMAX Retrain the model
+exog_vars = ["GDP","NEWYEAR","COVID"] #"CPI","DISPOSABLE INCOME","GASPRICE","CHIPCAR",
+
+model = pm.auto_arima(df1.y, X=df1[exog_vars], trace=True, error_action="ignore", suppress_warnings=True,seasonal=True, with_intercept=False)
+model.fit(df1.y, X=df1[exog_vars])
+
+fcast = model.predict(n_periods=14, X=df[130:144][exog_vars],return_conf_int=True,alpha=0.05)
+print(model.summary())
+
+#Future
+df1["Forecast_ARIMAX"]=model.fittedvalues()
+future = pd.DataFrame(fcast[0])
+future
+
+# Plot the forecast alongside historical values
+title = 'Sales - Actual vs. Predicted'
+ylabel='Sales'
+xlabel='Date'
+
+df1["y"].plot(figsize = (10, 7), legend = True)
+df1.Forecast_ARIMAX.plot(legend=True)
+future.plot(legend=True)
+
+#Training and test set
+test_months = 6
+training_set = df1.iloc[:-test_months, :]
+test_set = df1.iloc[-test_months:, :]
+test_set.tail()
+
+#exogenous variables
+train_exog = training_set.iloc[:,2:]
+test_exog = test_set.iloc[:,2:]
+test_exog.tail(1)
+
+#Auto_Arima: forecasting model
+model_2 = auto_arima(y = training_set['y'], X = train_exog, m = 12, seasonal = True, stepwise = False)
+print(model_2.summary())
+
+#Training and test set
+test_months = 6
+training_set = df1.iloc[:-test_months, :]
+test_set = df1.iloc[-test_months:, :]
+test_set.tail()
+
+error1x = mse(test_set['BCPR'], predictions)
+error2x = rmse(test_set['BCPR'], predictions)
+
+# Print new SARIMAX values
+print(f'SARIMAX(5,1,5)(1,0,[1],12) MSE Error: {error1x:11.10}')
+print(f'SARIMAX(5,1,5)(1,0,[1],12) RMSE Error: {error2x:11.10}')
+
+import numpy as np
+import pandas as pd
+
+import matplotlib.pyplot as plt
+%matplotlib inline
+from tensorflow import keras
+import math
+from keras.models import Sequential
+from keras.layers import Dense
+from keras.layers import LSTM
+from sklearn.preprocessing import MinMaxScaler
+from sklearn.metrics import mean_squared_error
+from math import sqrt
+
+import itertools
+import warnings
+warnings.filterwarnings('ignore')
+
+data = pd.read_excel('Data.xlsx',sheet_name='Data')
+data['Month'] = pd.to_datetime(data['Month'])
+data.set_index('Month',inplace=True)
+
+leng = 76
+cross_validation = data[:leng]
+#test = data[leng:]
+
+#Supress warnings
+import warnings
+warnings.filterwarnings('ignore')
+
+from sklearn.model_selection import TimeSeriesSplit
+from sklearn.metrics import mean_squared_error
+from sklearn.metrics import mean_absolute_percentage_error
+from statsmodels.tsa.statespace.sarimax import SARIMAX
+import statsmodels.api as sm
+tscv = TimeSeriesSplit(n_splits = 4)
+rmse = []
+mape=[]
+mape_train=[]
+#mape_test=[]
+for train_index, test_index in tscv.split(cross_validation):
+    cv_train, cv_test = cross_validation.iloc[train_index], cross_validation.iloc[test_index]
+    arma = sm.tsa.arima.ARIMA(cv_train,order=(4,2,1)).fit()
+    predict_train = arma.predict(cv_train.index.values[0],cv_train.index.values[-1])
+    predictions = arma.predict(cv_test.index.values[0], cv_test.index.values[-1])
+    true_values = cv_test.values
+    true_train = cv_train.values
+    rmse.append(sqrt(mean_squared_error(true_values, predictions)))
+    mape.append(mean_absolute_percentage_error(true_values, predictions))
+    mape_train.append(mean_absolute_percentage_error(true_train, predict_train))
+    #Test
+    #predict_test = arma.predict(test.index.values[0],test.index.values[-1])
+   # mape_test = mean_absolute_percentage_error(test.values, predict_test.values)
+#print("MAPE_TEST: {}".format(np.round(mape_test*100,decimals=2)))
+#print("RMSE: {}".format(np.round(np.mean(rmse),decimals=2)))
+print("MAPE_Train: {}".format(np.round(np.mean(mape_train)*100,decimals=2)))
+print("MAPE_Validation: {}".format(np.round(np.mean(mape)*100,decimals=2)))
+
+
