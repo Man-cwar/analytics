@@ -77,3 +77,38 @@ for col in regressors:
     model.add_regressor(col, standardize=True)
 model.fit(train_df)
 
+PROPHET2:
+# prepare expected column names
+from pandas import to_datetime
+data.columns = ['ds', 'y']
+data['ds']= to_datetime(data['ds'])
+from fbprophet import Prophet
+# define the model
+model = Prophet()
+# fit the model
+model.fit(data)
+# define the period for which we want a prediction
+future = list()
+for i in range(4, 7):
+	date = '2022-%02d' % i
+	future.append([date])
+future = pd.DataFrame(future)
+future.columns = ['ds']
+future['ds']= to_datetime(future['ds'])
+future['ds']
+# use the model to make a forecast
+forecast = model.predict(future)
+# summarize the forecast
+print(forecast[['ds', 'yhat', 'yhat_lower', 'yhat_upper']].head())
+
+model.plot(forecast)
+#### Visualize Each Components[Trends,yearly]
+model.plot_components(forecast)
+from fbprophet.diagnostics import cross_validation
+df_cv = cross_validation(model,horizon='365 days')
+df_cv.head()
+from fbprophet.diagnostics import performance_metrics
+df_p = performance_metrics(df_cv)
+df_p.head()
+from fbprophet.plot import plot_cross_validation_metric
+fig = plot_cross_validation_metric(df_cv, metric='rmse')
