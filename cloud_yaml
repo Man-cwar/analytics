@@ -1,0 +1,126 @@
+steps:
+  - name: "gcr.io/cloud-builders/gsutil"
+    id: download-env
+    entrypoint: "bash"
+    args:
+      - "-c"
+      - |
+
+          # Download the .env file to the Dockerfile directory
+          gsutil cp gs://chatbot_bucket_200/china_sales_chatbot/.env /workspace
+          gsutil cp gs://chatbot_bucket_200/china_sales_chatbot/fewshot_multi_table.json /workspace
+          # List the contents of the Dockerfile directory
+          ls -la /workspace/
+  # Build docker image
+  - name: "gcr.io/cloud-builders/docker"
+    id: build-image
+    entrypoint: "bash"
+    env:
+      - "DOCKER_BUILDKIT=1"
+      - 'CLOUD_BUILD_ENV_FILE=.env'
+    args:
+      - -c
+      - |
+        docker build --file ui/multi_table/Dockerfile \
+          --build-arg PROJECT_ID=${_PROJECT_ID} \
+          --build-arg ARTIFACT_REPO_NAME=${_ARTIFACT_REPO_NAME} \
+          --build-arg http_proxy=$$http_proxy \
+          --build-arg https_proxy=$$http_proxy \
+          --build-arg no_proxy=$$no_proxy \
+          --build-arg APP_MAIN_MODULE=${_APP_MAIN_MODULE} \
+          --build-arg NUM_WORKERS=${_NUM_WORKERS} \
+          --tag ${_IMAGE_URI} .
+
+  # Push Docker image
+  - name: "gcr.io/cloud-builders/docker"
+    id: push
+    entrypoint: "bash"
+    env:
+      - "DOCKER_BUILDKIT=1"
+    args:
+      - -c
+      - |
+        docker push ${_IMAGE_URI}
+    waitFor: ["build-image"]
+
+    # Deploy service
+  - name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
+    entrypoint: gcloud
+    id: "deploy"
+    waitFor:
+      - "push"
+    args:
+      [
+        "run",
+        "deploy",
+        "${_SERVICE_NAME}",
+        "--image",
+        "${_IMAGE_URI}",
+        "--region",
+        "us-central1",
+        "--vpc-connector",
+        "${_VPC_CONNECTOR}",
+        "--ingress",
+        "internal",
+        "--vpc-egress",
+        "all-traffic",
+        "--service-account",
+        "${_CLOUD_RUN_SA}",
+        "--port",
+        "8000",
+        "--cpu",
+        "2",
+        "--memory",
+        "8Gi",
+        "--set-secrets=FORDLLM_CLIENT_ID=${_FORDLLM_CLIENT_ID},FORDLLM_CLIENT_SECRET=${_FORDLLM_CLIENT_SECRET}",
+        "--allow-unauthenticated",
+      ]
+
+  # Allow all users to have access using the deployed url
+  - name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
+    entrypoint: gcloud
+    id: set-invoker
+    waitFor:
+      - "deploy"
+    args:
+      [
+        "run",
+        "services",
+        "add-iam-policy-binding",
+        "${_SERVICE_NAME}",
+        "--member",
+        "${_SERVICE_INVOKER}",
+        "--role",
+        "roles/run.invoker",
+        "--region",
+        "us-central1",
+      ]
+
+serviceAccount: 'projects/${_PROJECT_ID}/serviceAccounts/${_CLOUD_RUN_SA}'
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+  dynamic_substitutions: true
+  substitution_option: "ALLOW_LOOSE"
+  workerPool: "projects/ford-158dd864a0d0bbb6f103ff24/locations/us-central1/workerPools/workerpool-app-us-central1"
+  env:
+    - "http_proxy=http://internet.gcp.ford.com:83"
+    - "https_proxy=http://internet.gcp.ford.com:83"
+    - "no_proxy=.ford.com,.googleapis.com,.google.internal"
+
+# Set variable substitution values
+substitutions:
+  _PROJECT_ID: "ford-f3ff981824ba0ca90a815557"
+  _APP_NAME: "china-sales"
+  _SERVICE_NAME: "china-sales-assistant"
+  _ARTIFACT_REPO_NAME: "china-sales-chatbot"
+  _IMAGE_URI: us-central1-docker.pkg.dev/${_PROJECT_ID}/${_ARTIFACT_REPO_NAME}/${_APP_NAME}:latest
+  _CLOUD_RUN_SA: sa-developer@${_PROJECT_ID}.iam.gserviceaccount.com
+  _VPC_CONNECTOR: projects/prj-pp-gen-preprod-net-acc7/locations/us-central1/connectors/preprod-gen-central1
+  _SERVICE_INVOKER: "allUsers"
+  _APP_MAIN_MODULE: "main_woauth"
+  _NUM_WORKERS: "1"
+  _FORDLLM_CLIENT_ID: "china_sales_ford_llm_client_id:latest"
+  _FORDLLM_CLIENT_SECRET: "china_sales_ford_llm_client_secret:latest"
+
+timeout: 2400s
